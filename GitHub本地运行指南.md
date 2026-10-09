@@ -4,7 +4,7 @@
 
 无需注册 GitHub，也无需安装 Git：
 
-1. 在 GitHub 项目页点击 **Code → Download ZIP**。
+1. 在 GitHub 项目页点击 **Code → Download ZIP**，或直接下载仓库 `release/` 目录中的 `轻账-本地版.zip`。
 2. 解压压缩包，阅读仓库里的 [使用指南](使用指南.md)。
 3. Windows 双击 `启动轻账.bat`；macOS / Linux 在终端运行 `python3 server.py`。
 4. 浏览器打开 <http://127.0.0.1:4173>。
