@@ -7,7 +7,7 @@ import time
 import uuid
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.request import HTTPCookieProcessor, Request, build_opener
+from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
 ROOT = Path(__file__).resolve().parent
 
@@ -53,6 +53,8 @@ def run():
     server = start_server(port, db_path)
     try:
         wait_until_ready(base_url, server)
+        with urlopen(base_url + "/app.js", timeout=5) as asset_response:
+            assert asset_response.headers.get("Cache-Control") == "no-cache, must-revalidate"
         browser_a = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
         initial = {
             "version": 1,

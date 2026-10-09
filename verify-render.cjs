@@ -20,7 +20,9 @@ global.document = {
   createElement: () => new MockElement(),
   addEventListener() {}
 };
-global.window = { LedgerCore: global.LedgerCore, confirm: () => true };
+const cachedCoreVersion = { ...global.LedgerCore };
+delete cachedCoreVersion.dailyBudgetForDate;
+global.window = { LedgerCore: cachedCoreVersion, confirm: () => true };
 let storedState = null;
 let transactionDraftElement = null;
 getElement('#modalBody').querySelector = selector => selector === '#transactionForm' ? transactionDraftElement : null;
@@ -176,5 +178,5 @@ const targetFor = selectors => ({ closest: selector => selectors[selector] || nu
   assert.equal(remoteData.transactions.length, 2);
   assert.ok(remoteData.transactions.some(record => record.content === '另一浏览器新增'));
   assert.ok(remoteData.transactions.some(record => record.content === '当前浏览器新增'));
-  console.log('界面与交互验证通过：导航切换、趋势回看自定义、月/日预算覆盖、分类和记录增删改、统计更新、账户同步及头像编辑。');
+  console.log('界面与交互验证通过：导航切换、趋势回看自定义、动态日预算、旧版脚本缓存兼容、分类和记录增删改、统计更新、账户同步及头像编辑。');
 })().catch(error => { console.error(error); process.exitCode = 1; });

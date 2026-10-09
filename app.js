@@ -183,7 +183,16 @@ function allOnDate(key) { return recordsOn(key); }
 function dailyBudgetContext(key) {
   const mk=monthKey(key),monthBudget=state.monthBudgets[mk]||0;
   const hasOverride=Object.prototype.hasOwnProperty.call(state.dayBudgets,key);
-  return {monthBudget,hasOverride,...Core.dailyBudgetForDate(monthBudget,key,state.transactions,state.dayBudgets[key],hasOverride)};
+  const allocation=typeof Core.dailyBudgetForDate==='function'
+    ?Core.dailyBudgetForDate(monthBudget,key,state.transactions,state.dayBudgets[key],hasOverride)
+    :(()=>{
+      const [year,month,day]=key.split('-').map(Number),daysRemaining=Math.max(0,Core.daysInMonth(year,month)-day+1);
+      const spentBeforeCents=Core.sumRecords(Core.recordsInRange(state.transactions,`${mk}-01`,shiftDate(key,-1)),'expense');
+      const remainingMonthBudgetCents=Math.max(0,monthBudget-spentBeforeCents);
+      const defaultBudgetCents=monthBudget>0&&daysRemaining>0?Math.round(remainingMonthBudgetCents/daysRemaining):0;
+      return {budgetCents:hasOverride?state.dayBudgets[key]:defaultBudgetCents,defaultBudgetCents,daysRemaining,spentBeforeCents,remainingMonthBudgetCents};
+    })();
+  return {monthBudget,hasOverride,...allocation};
 }
 function dateLabelShort(key) { const d=dateFromKey(key); return `${d.getMonth()+1}月${d.getDate()}日`; }
 function amountForCell(cents) { const n=cents/100; if(n>=10000) return `${(n/10000).toFixed(1)}万`; if(n>=1000) return `${(n/1000).toFixed(1)}千`; return n.toFixed(0); }

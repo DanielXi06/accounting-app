@@ -237,6 +237,8 @@ class AppHandler(SimpleHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Frame-Options", "DENY")
+        if not urlsplit(self.path).path.startswith("/api/"):
+            self.send_header("Cache-Control", "no-cache, must-revalidate")
         super().end_headers()
 
     def _json(self, status: int, value: dict, *, cookie: str | None = None):
