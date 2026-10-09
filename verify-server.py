@@ -47,6 +47,8 @@ def wait_until_ready(base_url, process):
 
 
 def run():
+    launcher = (ROOT / "启动轻账.bat").read_bytes()
+    assert launcher.count(b"\n") == launcher.count(b"\r\n"), "Windows launcher must use CRLF line endings"
     db_path = ROOT / ".qingzhang-data" / f"verify-{uuid.uuid4().hex}.sqlite3"
     port = reserve_port()
     base_url = f"http://127.0.0.1:{port}"
