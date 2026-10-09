@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f7fb">
+  <title>账本 · 每一笔都清楚</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#calendar" aria-label="账本首页">
+        <span class="brand-mark">账</span>
+        <span><strong>轻账</strong><small>把日子记清楚</small></span>
+      </a>
+      <div class="topbar-right"><span class="currency-pill">¥ 人民币</span><button class="account-button" id="accountButton" aria-label="个人账户"><span class="account-avatar">♙</span><span id="accountLabel">登录</span></button></div>
+    </header>
+
+    <main id="mainView" class="main-view" aria-live="polite"></main>
+
+    <nav class="bottom-nav" aria-label="主导航">
+      <button class="nav-item active" data-page="calendar"><span class="nav-icon">▦</span><span>日历</span></button>
+      <button class="nav-item" data-page="stats"><span class="nav-icon">⌁</span><span>统计</span></button>
+    </nav>
+  </div>
+
+  <div class="modal-backdrop" id="modalBackdrop" hidden>
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-head"><div><p class="eyebrow" id="modalEyebrow">记一笔</p><h2 id="modalTitle">添加支出</h2></div><button class="icon-button close-modal" aria-label="关闭">×</button></div>
+      <div id="modalBody"></div>
+    </section>
+  </div>
+  <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+  <script src="core.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

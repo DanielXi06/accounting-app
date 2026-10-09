@@ -1,0 +1,5 @@
+.qingzhang-data/
+.verify-account-test-*/
+__pycache__/
+*.py[cod]
+/release/*.zip
