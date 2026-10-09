@@ -84,6 +84,15 @@ const targetFor = selectors => ({ closest: selector => selectors[selector] || nu
   const todayText = `${todayKey.getFullYear()}-${String(todayKey.getMonth()+1).padStart(2,'0')}-${String(todayKey.getDate()).padStart(2,'0')}`;
   const expectedTodayBudget = (global.LedgerCore.dailyBudgetForDate(31000, todayText, [], undefined, false).budgetCents / 100).toFixed(2);
   assert.ok(main.innerHTML.includes(`¥${expectedTodayBudget}`), 'the current day uses the remaining month balance');
+  await clickMainAction('edit-month-budget');
+  form = { id: 'budgetForm', values: { amount: '620.00' } };
+  await getElement('#modalBody').handlers.submit[0]({ preventDefault() {}, target: form });
+  const expectedUpdatedBudget = (global.LedgerCore.dailyBudgetForDate(62000, todayText, [], undefined, false).budgetCents / 100).toFixed(2);
+  assert.ok(main.innerHTML.includes(`¥${expectedUpdatedBudget}`), 'changing the monthly budget immediately recalculates the daily default');
+  await clickMainAction('edit-month-budget');
+  form = { id: 'budgetForm', values: { amount: '310.00' } };
+  await getElement('#modalBody').handlers.submit[0]({ preventDefault() {}, target: form });
+  assert.ok(main.innerHTML.includes(`¥${expectedTodayBudget}`), 'restoring the monthly budget immediately restores its daily allocation');
   await clickMainAction('edit-day-budget');
   assert.ok(getElement('#modalBody').innerHTML.includes(`value="${expectedTodayBudget}"`), 'the edit form starts with the dynamic daily budget');
   assert.match(getElement('#modalBody').innerHTML, /含当天在内的本月剩余/);
