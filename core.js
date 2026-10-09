@@ -20,7 +20,29 @@
     return [...groups.values()].sort((a,b)=>b.amountCents-a.amountCents);
   }
   function recordsInRange(records,start,end) { return start>end?[]:records.filter(r=>r.date>=start&&r.date<=end); }
-  function dailyBudget(monthBudgetCents,days,overrideCents,hasOverride) { return hasOverride?overrideCents:(monthBudgetCents>0&&days>0?Math.round(monthBudgetCents/days):0); }
+  function daysRemainingInMonth(key) {
+    const [year,month,day]=key.split('-').map(Number);
+    return Math.max(0,daysInMonth(year,month)-day+1);
+  }
+  function dailyBudget(monthBudgetCents,days,overrideCents,hasOverride,spentBeforeCents=0) {
+    if(hasOverride)return overrideCents;
+    if(!(monthBudgetCents>0&&days>0))return 0;
+    const remainingCents=Math.max(0,monthBudgetCents-Math.max(0,spentBeforeCents||0));
+    return Math.round(remainingCents/days);
+  }
+  function dailyBudgetForDate(monthBudgetCents,key,records,overrideCents,hasOverride) {
+    const daysRemaining=daysRemainingInMonth(key),monthStart=`${monthKey(key)}-01`,dayBefore=shiftDate(key,-1);
+    const spentBeforeCents=sumRecords(recordsInRange(records,monthStart,dayBefore),'expense');
+    const remainingMonthBudgetCents=Math.max(0,monthBudgetCents-spentBeforeCents);
+    const defaultBudgetCents=dailyBudget(monthBudgetCents,daysRemaining,undefined,false,spentBeforeCents);
+    return {
+      budgetCents:hasOverride?overrideCents:defaultBudgetCents,
+      defaultBudgetCents,
+      daysRemaining,
+      spentBeforeCents,
+      remainingMonthBudgetCents
+    };
+  }
   function budgetMeter(spentCents,budgetCents) {
     if(!(budgetCents>0))return {budgeted:false,pct:0,over:false,width:0,label:'暂无当日预算'};
     const pct=spentCents/budgetCents*100,over=spentCents>budgetCents;
@@ -51,5 +73,5 @@
     }
     return Array.from({length:n},(_,i)=>{const key=shiftDate(anchor,i-(n-1));return {start:key,end:key,label:rangeDate(key,false),title:rangeDate(key)};});
   }
-  root.LedgerCore=Object.freeze({DAY_MS,localDateKey,dateFromKey,shiftDate,shiftMonth,daysInMonth,monthKey,mondayOf,parseMoney,sumRecords,groupRecords,recordsInRange,dailyBudget,budgetMeter,periodForYear,periodForMonth,periodForWeek,trendPeriods});
+  root.LedgerCore=Object.freeze({DAY_MS,localDateKey,dateFromKey,shiftDate,shiftMonth,daysInMonth,daysRemainingInMonth,monthKey,mondayOf,parseMoney,sumRecords,groupRecords,recordsInRange,dailyBudget,dailyBudgetForDate,budgetMeter,periodForYear,periodForMonth,periodForWeek,trendPeriods});
 })(globalThis);

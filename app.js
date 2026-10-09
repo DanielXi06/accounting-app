@@ -2,7 +2,7 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const Core = window.LedgerCore;
-const {localDateKey,dateFromKey,shiftDate,shiftMonth,daysInMonth,monthKey,mondayOf,parseMoney,sumRecords} = Core;
+const {localDateKey,dateFromKey,shiftDate,shiftMonth,monthKey,mondayOf,parseMoney,sumRecords} = Core;
 const TODAY = localDateKey(new Date());
 const moneyFormatter = new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const palette = ['#647eea','#e57669','#4aad86','#e6ad56','#8b72d8','#45a9bb','#e28ab2','#93a750','#e18b4d','#7388a2','#cf6f9c','#5d9fd4'];
@@ -180,6 +180,11 @@ function currentDateLabel(key) { return formatDate(key,{year:'numeric',month:'lo
 function getCategory(id) { return state.categories.find(c=>c.id===id)||{id:'missing',type:'expense',group:'其他',name:'已移除分类',icon:'❔'}; }
 function recordsOn(key) { return state.transactions.filter(t=>t.date===key).sort((a,b)=>(b.updatedAt||b.createdAt||0)-(a.updatedAt||a.createdAt||0)); }
 function allOnDate(key) { return recordsOn(key); }
+function dailyBudgetContext(key) {
+  const mk=monthKey(key),monthBudget=state.monthBudgets[mk]||0;
+  const hasOverride=Object.prototype.hasOwnProperty.call(state.dayBudgets,key);
+  return {monthBudget,hasOverride,...Core.dailyBudgetForDate(monthBudget,key,state.transactions,state.dayBudgets[key],hasOverride)};
+}
 function dateLabelShort(key) { const d=dateFromKey(key); return `${d.getMonth()+1}月${d.getDate()}日`; }
 function amountForCell(cents) { const n=cents/100; if(n>=10000) return `${(n/10000).toFixed(1)}万`; if(n>=1000) return `${(n/1000).toFixed(1)}千`; return n.toFixed(0); }
 function toast(message,error=false) { const el=document.createElement('div'); el.className=`toast${error?' error':''}`; el.textContent=message; $('#toastRegion').append(el); setTimeout(()=>el.remove(),2700); }
@@ -239,21 +244,24 @@ function monthBudgetCard() {
   return `<section class="surface detail-card">
     <div class="card-heading"><div><h3>月度预算</h3><div class="subheading">${mk.replace('-','年')}月 · 当月累计支出</div></div><button class="small-button" data-action="edit-month-budget">编辑预算</button></div>
     <div class="budget-layout"><div class="donut" style="--p:${ring}%;--donut-color:${over?'var(--red)':'var(--blue)'}"><div class="donut-center"><strong class="${over?'over-budget':''}">${center}</strong><small>${over?'超预算':budget?'预算使用':'未设置'}</small></div></div>
-      ${budget?`<div class="budget-info"><div class="amount-main ${over?'over-budget':''}">${fmtMoney(spent)} <span style="font-size:11px;color:#9aa3b1;font-weight:500">/ ${fmtMoney(budget)}</span></div><div class="muted-line ${over?'over-budget':''}">${over?`已超出 ${fmtMoney(spent-budget)}`:`剩余 ${fmtMoney(Math.max(0,budget-spent))}`}</div></div>`:`<div class="budget-empty">还没有设置本月预算。设置后，月度与日均预算都会在这里显示。</div>`}
+      ${budget?`<div class="budget-info"><div class="amount-main ${over?'over-budget':''}">${fmtMoney(spent)} <span style="font-size:11px;color:#9aa3b1;font-weight:500">/ ${fmtMoney(budget)}</span></div><div class="muted-line ${over?'over-budget':''}">${over?`已超出 ${fmtMoney(spent-budget)}`:`剩余 ${fmtMoney(Math.max(0,budget-spent))}`}</div></div>`:`<div class="budget-empty">还没有设置本月预算。设置后，每日预算会按月余预算动态分配。</div>`}
     </div>
   </section>`;
 }
 function dailySummaryCard() {
-  const records=recordsOn(selectedDate), expense=sumRecords(records,'expense'), income=sumRecords(records,'income'), mk=monthKey(selectedDate);
-  const monthBudget=state.monthBudgets[mk]||0;
-  const hasOverride=Object.prototype.hasOwnProperty.call(state.dayBudgets,selectedDate), budget=Core.dailyBudget(monthBudget,daysInMonth(...mk.split('-').map(Number)),state.dayBudgets[selectedDate],hasOverride);
-  const meter=Core.budgetMeter(expense,budget), over=meter.over, width=meter.width;
-  const budgetText=budget?fmtMoney(budget):'未设置';
-  const barText=meter.label;
+  const records=recordsOn(selectedDate), expense=sumRecords(records,'expense'), income=sumRecords(records,'income');
+  const {monthBudget,hasOverride,budgetCents:budget,defaultBudgetCents,daysRemaining,remainingMonthBudgetCents}=dailyBudgetContext(selectedDate);
+  const budgetExists=monthBudget>0||hasOverride;
+  const meter=Core.budgetMeter(expense,budget), zeroBudgetOver=budget===0&&budgetExists&&expense>0, over=meter.over||zeroBudgetOver;
+  const width=budget>0?meter.width:(zeroBudgetOver?100:0);
+  const budgetText=budgetExists?fmtMoney(budget):'未设置';
+  const barText=budget>0?meter.label:!budgetExists?'暂无当日预算':zeroBudgetOver?`支出 ${fmtMoney(expense)}，已超过 ¥0.00 日预算`:hasOverride?'单日预算设为 ¥0.00':remainingMonthBudgetCents>0?'月余预算不足 ¥0.01/天':'本月预算余额已用完';
+  const allocationHint=hasOverride?`单日预算已单独设置 · 动态日预算 ${fmtMoney(defaultBudgetCents)}`:monthBudget>0?`月余 ${fmtMoney(remainingMonthBudgetCents)} ÷ ${daysRemaining} 天（含当天）`:'';
+  const barDetail=budgetExists?`${fmtMoney(expense)} / ${fmtMoney(budget)}`:'先设置月预算或单日预算';
   return `<section class="surface detail-card">
-    <div class="card-heading"><div><h3>当日概览</h3><div class="subheading">${currentDateLabel(selectedDate)}</div></div><button class="small-button" data-action="edit-day-budget">${hasOverride?'编辑日预算':'设置日预算'}</button></div>
+    <div class="card-heading"><div><h3>当日概览</h3><div class="subheading">${currentDateLabel(selectedDate)}${allocationHint?` · ${allocationHint}`:''}</div></div><button class="small-button" data-action="edit-day-budget">${hasOverride?'编辑日预算':'设置日预算'}</button></div>
     <div class="summary-metrics"><div class="metric income"><div class="metric-label">收入</div><div class="metric-value">${fmtMoney(income)}</div></div><div class="metric expense"><div class="metric-label">支出</div><div class="metric-value">${fmtMoney(expense)}</div></div><div class="metric"><div class="metric-label">当日预算${hasOverride?' · 单独设置':''}</div><div class="metric-value">${budgetText}</div></div></div>
-    <div class="daily-budget-bar" aria-label="${budget?barText:'暂无当日预算'}"><div class="daily-budget-fill ${over?'over':''}" style="width:${width}%"></div></div><div class="bar-caption"><span class="${over?'over-label':''}">${barText}</span><span>${budget?`${fmtMoney(expense)} / ${fmtMoney(budget)}`:monthBudget?'月预算日均已被单日设置为 0':'先设置月预算或单日预算'}</span></div>
+    <div class="daily-budget-bar" aria-label="${budgetExists?barText:'暂无当日预算'}"><div class="daily-budget-fill ${over?'over':''}" style="width:${width}%"></div></div><div class="bar-caption"><span class="${over?'over-label':''}">${barText}</span><span>${barDetail}</span></div>
   </section>`;
 }
 function recordCard() {
@@ -351,12 +359,12 @@ function showModal(title,eyebrow,html,kind) {
 function closeModal() { modalBackdrop.hidden=true; activeModal=null; categoryReturnDraft=null; modalBody.innerHTML=''; }
 function openBudgetModal(isDay) {
   if(isDay) {
-    const has=Object.prototype.hasOwnProperty.call(state.dayBudgets,selectedDate), month=state.monthBudgets[monthKey(selectedDate)]||0, daily=month?Math.round(month/daysInMonth(...monthKey(selectedDate).split('-').map(Number))):0;
-    const value=has?state.dayBudgets[selectedDate]:daily;
-    showModal('设置当日预算','预算设置',`<form id="budgetForm" class="form-stack"><p class="modal-note">仅影响 ${currentDateLabel(selectedDate)}。单日预算优先于“月预算 ÷ 当月天数”，不会更改月预算或其他日期。</p><div class="field"><label for="budgetAmount">当日预算（人民币）</label><div class="amount-input-wrap"><span class="amount-prefix">¥</span><input id="budgetAmount" name="amount" inputmode="decimal" placeholder="0.00" value="${(value/100).toFixed(2)}" required></div></div><div class="form-error" id="formError"></div><div class="form-footer">${has?`<button type="button" class="secondary-btn" data-action="clear-day-budget">恢复月预算日均</button>`:'<span></span>'}<div class="form-footer-right"><button type="button" class="secondary-btn close-modal">取消</button><button class="primary-btn" type="submit">保存当日预算</button></div></div></form>`,'day-budget');
+    const context=dailyBudgetContext(selectedDate),has=context.hasOverride,value=has?state.dayBudgets[selectedDate]:context.budgetCents;
+    const note=context.monthBudget>0?`仅影响 ${currentDateLabel(selectedDate)}。默认日预算按“月度预算减去当天之前的本月支出，再除以含当天在内的本月剩余 ${context.daysRemaining} 天”计算。${has?'当前已覆盖默认值。':''}`:`仅影响 ${currentDateLabel(selectedDate)}。设置后只覆盖当天预算，不会改变月预算或其他日期。`;
+    showModal('设置当日预算','预算设置',`<form id="budgetForm" class="form-stack"><p class="modal-note">${note}</p><div class="field"><label for="budgetAmount">当日预算（人民币）</label><div class="amount-input-wrap"><span class="amount-prefix">¥</span><input id="budgetAmount" name="amount" inputmode="decimal" placeholder="0.00" value="${(value/100).toFixed(2)}" required></div></div><div class="form-error" id="formError"></div><div class="form-footer">${has?`<button type="button" class="secondary-btn" data-action="clear-day-budget">恢复动态日预算</button>`:'<span></span>'}<div class="form-footer-right"><button type="button" class="secondary-btn close-modal">取消</button><button class="primary-btn" type="submit">保存当日预算</button></div></div></form>`,'day-budget');
   } else {
     const key=monthKey(selectedDate), value=state.monthBudgets[key]||0;
-    showModal(`${key.replace('-','年')}月预算`,'月度预算',`<form id="budgetForm" class="form-stack"><p class="modal-note">月度预算用于统计月累计支出占比，并按当月实际天数计算默认日预算。</p><div class="field"><label for="budgetAmount">月度预算（人民币）</label><div class="amount-input-wrap"><span class="amount-prefix">¥</span><input id="budgetAmount" name="amount" inputmode="decimal" placeholder="0.00" value="${(value/100).toFixed(2)}" required></div></div><div class="form-error" id="formError"></div><div class="form-footer"><span></span><div class="form-footer-right"><button type="button" class="secondary-btn close-modal">取消</button><button class="primary-btn" type="submit">保存月预算</button></div></div></form>`,'month-budget');
+    showModal(`${key.replace('-','年')}月预算`,'月度预算',`<form id="budgetForm" class="form-stack"><p class="modal-note">月度预算用于统计月累计支出占比。每日默认预算会从月度预算中扣除当天之前已发生的支出，再平均分配到本月剩余天数（含当天）。</p><div class="field"><label for="budgetAmount">月度预算（人民币）</label><div class="amount-input-wrap"><span class="amount-prefix">¥</span><input id="budgetAmount" name="amount" inputmode="decimal" placeholder="0.00" value="${(value/100).toFixed(2)}" required></div></div><div class="form-error" id="formError"></div><div class="form-footer"><span></span><div class="form-footer-right"><button type="button" class="secondary-btn close-modal">取消</button><button class="primary-btn" type="submit">保存月预算</button></div></div></form>`,'month-budget');
   }
 }
 function categoryGroups(type) { return [...new Set(state.categories.filter(c=>c.type===type).map(c=>c.group))]; }
@@ -460,7 +468,7 @@ main.addEventListener('click',async e=>{
     case 'add-income':openTransactionModal('income');break;
     case 'edit-record':{const r=state.transactions.find(x=>x.id===action.dataset.id);if(r)openTransactionModal(r.type,r);break;}
     case 'delete-record':{const id=action.dataset.id;if(window.confirm('确定删除这条记录吗？删除后会立即从统计和预算中扣除。')){state.transactions=state.transactions.filter(r=>r.id!==id);closeModal();await commit('记录已删除');}break;}
-    case 'clear-day-budget':delete state.dayBudgets[selectedDate];closeModal();await commit('已恢复月预算日均');break;
+    case 'clear-day-budget':delete state.dayBudgets[selectedDate];closeModal();await commit('已恢复动态日预算');break;
   }
 });
 main.addEventListener('change',e=>{
@@ -500,7 +508,7 @@ modalBody.addEventListener('click',async e=>{
   }
   if(action?.dataset.action==='account-logout'){await logoutAccount();return;}
   if(action?.dataset.action==='clear-day-budget'){
-    delete state.dayBudgets[selectedDate];closeModal();commit('已恢复月预算日均');return;
+    delete state.dayBudgets[selectedDate];closeModal();commit('已恢复动态日预算');return;
   }
   if(action?.dataset.action==='delete-record'){
     const id=action.dataset.id;

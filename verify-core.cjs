@@ -27,6 +27,24 @@ assert.deepEqual(weeklyTrend.map(x => x.start), ['2026-10-06', '2026-10-07', '20
 assert.equal(core.dailyBudget(310000, 31, undefined, false), 10000);
 assert.equal(core.dailyBudget(310000, 31, 8500, true), 8500);
 assert.equal(core.dailyBudget(310000, 31, undefined, false), 10000, 'a day override must not change the monthly default');
+assert.equal(core.daysRemainingInMonth('2026-10-09'), 23, 'the selected day is included in the remaining days');
+assert.equal(core.daysRemainingInMonth('2024-02-28'), 2, 'leap February includes both remaining dates');
+assert.equal(core.dailyBudget(310000, 23, undefined, false, 100000), 9130, 'default budget is remaining month budget divided by remaining days');
+assert.equal(core.dailyBudget(310000, 23, undefined, false, 350000), 0, 'daily allocation never goes below zero');
+assert.equal(core.dailyBudget(310000, 23, 8500, true, 100000), 8500, 'a manual day override takes precedence');
+const dailyAllocation = core.dailyBudgetForDate(310000, '2026-10-09', [
+  { date: '2026-10-08', type: 'expense', amountCents: 100000 },
+  { date: '2026-10-09', type: 'expense', amountCents: 5000 },
+  { date: '2026-10-05', type: 'income', amountCents: 20000 },
+  { date: '2026-09-30', type: 'expense', amountCents: 90000 },
+], undefined, false);
+assert.deepEqual(dailyAllocation, { budgetCents: 9130, defaultBudgetCents: 9130, daysRemaining: 23, spentBeforeCents: 100000, remainingMonthBudgetCents: 210000 });
+assert.equal(core.dailyBudgetForDate(310000, '2026-10-09', [
+  { date: '2026-10-08', type: 'expense', amountCents: 150000 },
+], undefined, false).budgetCents, 6957, 'editing a prior expense updates the next daily allocation');
+assert.equal(core.dailyBudgetForDate(310000, '2026-10-09', [], 8500, true).budgetCents, 8500, 'manual override stays local to that date');
+assert.equal(core.dailyBudgetForDate(1, '2026-10-09', [], undefined, false).budgetCents, 0, 'sub-cent daily allocations round to zero safely');
+assert.equal(core.dailyBudgetForDate(310000, '2026-10-31', [{ date: '2026-10-30', type: 'expense', amountCents: 100000 }], undefined, false).budgetCents, 210000, 'the final day receives the entire remaining monthly budget');
 assert.deepEqual(core.budgetMeter(15000, 10000), { budgeted: true, pct: 150, over: true, width: 100, label: '超出 50%' });
 assert.equal(core.budgetMeter(8500, 10000).label, '已使用 85%');
 assert.equal(core.budgetMeter(0, 0).label, '暂无当日预算');
