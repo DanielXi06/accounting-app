@@ -272,10 +272,15 @@ function calendarHeaderTitle() {
   return formatDate(selectedDate,{year:'numeric',month:'long',day:'numeric'});
 }
 function calendarSummary(key) { const rs=allOnDate(key); return {expense:sumRecords(rs,'expense'),income:sumRecords(rs,'income')}; }
-function calendarCell(key,currentMonth,weekMode=false) {
-  const d=dateFromKey(key), summary=calendarSummary(key), outside=currentMonth && monthKey(key)!==currentMonth,dueCount=activeDebts().filter(debt=>debt.nextDueDate===key).length;
+function debtCalendarDueCounts(start,end) {
+  const counts=new Map();
+  activeDebts().forEach(debt=>Core.debtScheduledDates(debt,start,end).forEach(key=>counts.set(key,(counts.get(key)||0)+1)));
+  return counts;
+}
+function calendarCell(key,currentMonth,weekMode=false,dueCounts=new Map()) {
+  const d=dateFromKey(key), summary=calendarSummary(key), outside=currentMonth && monthKey(key)!==currentMonth,dueCount=dueCounts.get(key)||0;
   const classes=['calendar-cell',outside?'outside':'',key===TODAY?'today':'',key===selectedDate?'selected':'',weekMode?'week-cell':''].filter(Boolean).join(' ');
-  return `<button class="${classes}" data-date="${key}" aria-label="${currentDateLabel(key)}，支出 ${fmtMoney(summary.expense)}，收入 ${fmtMoney(summary.income)}">
+  return `<button class="${classes}" data-date="${key}" aria-label="${currentDateLabel(key)}，支出 ${fmtMoney(summary.expense)}，收入 ${fmtMoney(summary.income)}${dueCount?`，${dueCount} 笔还款计划`:''}">
     <span class="day-number">${d.getDate()}</span>
     <span class="cell-totals">${summary.expense?`<span class="cell-dot cell-expense">−${amountForCell(summary.expense)}</span>`:''}${summary.income?`<span class="cell-dot cell-income">+${amountForCell(summary.income)}</span>`:''}${dueCount?`<span class="cell-dot cell-due">还款 ${dueCount}</span>`:''}</span>
   </button>`;
@@ -283,8 +288,9 @@ function calendarCell(key,currentMonth,weekMode=false) {
 function calendarCanvas() {
   if(calendarView==='day') {
     const d=dateFromKey(selectedDate), s=calendarSummary(selectedDate);
-    const dueCount=activeDebts().filter(debt=>debt.nextDueDate===selectedDate).length;
-    return `<div class="day-canvas"><div class="day-card"><div class="day-big">${d.getDate()}</div><div class="day-meta">${formatDate(selectedDate,{year:'numeric',month:'long',weekday:'long'})}${dueCount?` · ${dueCount} 笔债务到期`:''}</div><div class="day-flow"><span>收入<b style="color:var(--green)">${fmtMoney(s.income)}</b></span><span>支出<b style="color:var(--red)">${fmtMoney(s.expense)}</b></span></div></div></div>`;
+    const debtDueCounts=debtCalendarDueCounts(selectedDate,selectedDate);
+    const dueCount=debtDueCounts.get(selectedDate)||0;
+    return `<div class="day-canvas"><div class="day-card"><div class="day-big">${d.getDate()}</div><div class="day-meta">${formatDate(selectedDate,{year:'numeric',month:'long',weekday:'long'})}${dueCount?` · ${dueCount} 笔还款计划`:''}</div><div class="day-flow"><span>收入<b style="color:var(--green)">${fmtMoney(s.income)}</b></span><span>支出<b style="color:var(--red)">${fmtMoney(s.expense)}</b></span></div></div></div>`;
   }
   let keys=[];
   if(calendarView==='month') {
@@ -292,7 +298,8 @@ function calendarCanvas() {
     keys=Array.from({length:42},(_,i)=>shiftDate(start,i));
   } else { const start=mondayOf(selectedDate); keys=Array.from({length:7},(_,i)=>shiftDate(start,i)); }
   const titleMonth=calendarView==='month'?monthKey(selectedDate):'';
-  return `<div class="calendar-weekdays"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div><div class="month-grid ${calendarView==='week'?'week-grid':''}">${keys.map(k=>calendarCell(k,titleMonth,calendarView==='week')).join('')}</div>`;
+  const debtDueCounts=debtCalendarDueCounts(keys[0],keys[keys.length-1]);
+  return `<div class="calendar-weekdays"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div><div class="month-grid ${calendarView==='week'?'week-grid':''}">${keys.map(k=>calendarCell(k,titleMonth,calendarView==='week',debtDueCounts)).join('')}</div>`;
 }
 function groupRecords(records,type) {
   return Core.groupRecords(records,type,state.categories);
@@ -432,7 +439,8 @@ function accountFinanceCard(item,kind,isDebt=false) {
     return `<article class="finance-card tone-${htmlSafe(kind.tone)}" role="button" tabindex="0" data-action="edit-asset" data-id="${htmlSafe(item.id)}"><span class="finance-icon">${htmlSafe(item.icon||kind.icon)}</span><div class="finance-card-copy">${header}${info}</div><div class="finance-amount"><small>${label}</small><strong>${fmtMoney(value)}</strong></div></article>`;
   }
   const when=delta<0?`已逾期 ${Math.abs(delta)} 天`:delta===0?'今天到期':`还剩 ${delta} 天`;
-  return `<article class="finance-card debt-finance-card tone-${htmlSafe(kind.tone)}" role="button" tabindex="0" data-action="edit-debt" data-id="${htmlSafe(item.id)}"><span class="finance-icon">${htmlSafe(item.icon||kind.icon)}</span><div class="finance-card-copy">${header}${info}<small class="${delta<0?'overdue-text':''}">${formatDate(due,{year:'numeric',month:'short',day:'numeric'})} · ${when}</small><small>每次 ${fmtMoney(Math.min(item.installmentCents,item.remainingCents))} · 预计还清 ${item.expectedPayoffDate?formatDate(item.expectedPayoffDate,{year:'numeric',month:'short',day:'numeric'}):'—'}</small></div><div class="finance-amount"><small>剩余债务</small><strong>${fmtMoney(item.remainingCents)}</strong><button class="small-button repay-inline" data-action="repay-debt" data-id="${htmlSafe(item.id)}">已还款</button></div></article>`;
+  const repaymentSummary=item.periodic?`每次 ${fmtMoney(Math.min(item.installmentCents,item.remainingCents))} · 预计还清 ${item.expectedPayoffDate?formatDate(item.expectedPayoffDate,{year:'numeric',month:'short',day:'numeric'}):'—'}`:`计划还款 ${fmtMoney(Math.min(item.installmentCents,item.remainingCents))}`;
+  return `<article class="finance-card debt-finance-card tone-${htmlSafe(kind.tone)}" role="button" tabindex="0" data-action="edit-debt" data-id="${htmlSafe(item.id)}"><span class="finance-icon">${htmlSafe(item.icon||kind.icon)}</span><div class="finance-card-copy">${header}${info}<small class="${delta<0?'overdue-text':''}">${formatDate(due,{year:'numeric',month:'short',day:'numeric'})} · ${when}</small><small>${repaymentSummary}</small></div><div class="finance-amount"><small>剩余债务</small><strong>${fmtMoney(item.remainingCents)}</strong><button class="small-button repay-inline" data-action="repay-debt" data-id="${htmlSafe(item.id)}">已还款</button></div></article>`;
 }
 function renderAccounts() {
   const totals=totalAssetAmounts(), username=account?.username||'本机账本',avatar=account?.avatar||'preset:person',debts=activeDebts();
@@ -474,15 +482,48 @@ function setAssetBalanceMode(mode) {
 function openDebtModal(debt=null) {
   const kind=debt?.kind||'personal',periodic=!!(debt?debt.periodic:true),custom=kind==='custom';
   const options=debtKinds.map(k=>`<option value="${k.id}" ${kind===k.id?'selected':''}>${k.icon} ${htmlSafe(k.name)}</option>`).join('');
-  showModal(debt?'编辑债务':'添加债务','债务计划',`<form id="debtForm" class="form-stack" data-id="${htmlSafe(debt?.id||'')}"><div class="field"><label for="debtKind">债务类别</label><select id="debtKind" name="kind">${options}</select></div><div class="field" id="debtCustomField" ${custom?'':'hidden'}><label for="debtCustomCategory">自定义类别名称</label><input id="debtCustomCategory" name="category" maxlength="32" value="${htmlSafe(debt?.category||'')}" placeholder="例如：装修借款"></div><div class="field"><label for="debtName">债务名称</label><input id="debtName" name="name" maxlength="48" value="${htmlSafe(debt?.name||debtKinds.find(k=>k.id===kind)?.name||'')}" required></div><div class="field"><label for="debtDetail">补充信息（选填）</label><input id="debtDetail" name="detail" maxlength="80" value="${htmlSafe(debt?.detail||'')}" placeholder="例如：贷款机构、借款人"></div><div class="field"><label for="debtTotal">债务总额</label><div class="amount-input-wrap"><span class="amount-prefix">¥</span><input id="debtTotal" name="total" inputmode="decimal" value="${debt?(debt.totalCents/100).toFixed(2):''}" required></div></div><div class="field"><label for="debtPeriodic">是否周期性还款</label><select id="debtPeriodic" name="periodic"><option value="yes" ${periodic?'selected':''}>是</option><option value="no" ${periodic?'':'selected'}>否</option></select></div><div id="periodicDebtFields" class="form-row" ${periodic?'':'hidden'}><div class="field"><label for="debtFirstDate">第一次还款日期</label><input id="debtFirstDate" name="firstDueDate" type="date" value="${htmlSafe(debt?.firstDueDate||TODAY)}"></div><div class="field"><label for="debtFrequency">还款频率</label><div class="frequency-fields"><input id="debtFrequency" name="frequency" type="number" min="1" max="3650" step="1" value="${htmlSafe(debt?.frequency||1)}"><select id="debtUnit" name="unit"><option value="day" ${debt?.unit==='day'?'selected':''}>日</option><option value="week" ${debt?.unit==='week'?'selected':''}>周</option><option value="month" ${!debt||debt.unit==='month'?'selected':''}>月</option></select></div></div></div><div id="singleDebtFields" class="form-row" ${periodic?'hidden':''}><div class="field"><label for="debtDueDate">预计还款日期</label><input id="debtDueDate" name="dueDate" type="date" value="${htmlSafe(debt?.firstDueDate||TODAY)}"></div></div><div class="field"><label for="debtInstallment">每次还款金额</label><div class="amount-input-wrap"><span class="amount-prefix">¥</span><input id="debtInstallment" name="installment" inputmode="decimal" value="${debt?(debt.installmentCents/100).toFixed(2):''}" required></div><small class="avatar-hint">单次还款金额不得高于债务总额。</small></div><div class="debt-payoff-preview" id="debtPayoffPreview">填写金额和还款日期后显示预计还清日期。</div><div class="form-error" id="formError"></div><div class="form-footer">${debt?`<button type="button" class="danger-btn" data-action="delete-debt" data-id="${htmlSafe(debt.id)}">删除债务</button>`:'<span></span>'}<div class="form-footer-right"><button type="button" class="secondary-btn close-modal">取消</button><button type="submit" class="primary-btn">保存债务</button></div></div></form>`,'debt');
+  const installment=debt?(debt.installmentCents/100).toFixed(2):'';
+  showModal(debt?'编辑债务':'添加债务','债务计划',`<form id="debtForm" class="form-stack" data-id="${htmlSafe(debt?.id||'')}">
+    <div class="field"><label for="debtKind">债务类别</label><select id="debtKind" name="kind">${options}</select></div>
+    <div class="field" id="debtCustomField" ${custom?'':'hidden'}><label for="debtCustomCategory">自定义类别名称</label><input id="debtCustomCategory" name="category" maxlength="32" value="${htmlSafe(debt?.category||'')}" placeholder="例如：装修借款"></div>
+    <div class="field"><label for="debtName">债务名称</label><input id="debtName" name="name" maxlength="48" value="${htmlSafe(debt?.name||debtKinds.find(k=>k.id===kind)?.name||'')}" required></div>
+    <div class="field"><label for="debtDetail">补充信息（选填）</label><input id="debtDetail" name="detail" maxlength="80" value="${htmlSafe(debt?.detail||'')}" placeholder="例如：贷款机构、借款人"></div>
+    <div class="field"><label for="debtTotal">债务总额</label><div class="amount-input-wrap"><span class="amount-prefix">¥</span><input id="debtTotal" name="total" inputmode="decimal" value="${debt?(debt.totalCents/100).toFixed(2):''}" required></div></div>
+    <div class="field"><label for="debtPeriodic">是否周期性还款</label><select id="debtPeriodic" name="periodic"><option value="yes" ${periodic?'selected':''}>是</option><option value="no" ${periodic?'':'selected'}>否</option></select></div>
+    <fieldset id="periodicDebtFields" class="debt-payment-branch" ${periodic?'':'hidden disabled'}>
+      <div class="form-row">
+        <div class="field"><label for="debtFirstDate">第一次还款日期</label><input id="debtFirstDate" name="firstDueDate" type="date" value="${htmlSafe(debt?.firstDueDate||TODAY)}" required></div>
+        <div class="field"><label for="debtFrequency">还款频率</label><div class="frequency-fields"><input id="debtFrequency" name="frequency" type="number" min="1" max="3650" step="1" value="${htmlSafe(debt?.frequency||1)}" required><select id="debtUnit" name="unit"><option value="day" ${debt?.unit==='day'?'selected':''}>日</option><option value="week" ${debt?.unit==='week'?'selected':''}>周</option><option value="month" ${!debt||debt.unit==='month'?'selected':''}>月</option></select></div></div>
+      </div>
+      <div class="field"><label for="periodicInstallment">每次还款金额</label><div class="amount-input-wrap"><span class="amount-prefix">¥</span><input id="periodicInstallment" name="periodicInstallment" inputmode="decimal" value="${installment}" required></div><small class="avatar-hint">每次还款金额不得高于债务总额。</small></div>
+      <div class="debt-payoff-preview" id="debtPayoffPreview">填写有效金额和还款日期后显示预计还清日期。</div>
+    </fieldset>
+    <fieldset id="singleDebtFields" class="debt-payment-branch" ${periodic?'hidden disabled':''}>
+      <div class="form-row">
+        <div class="field"><label for="debtDueDate">下一次还款日期</label><input id="debtDueDate" name="dueDate" type="date" value="${htmlSafe(debt?.firstDueDate||TODAY)}" required></div>
+        <div class="field"><label for="singleInstallment">还款金额</label><div class="amount-input-wrap"><span class="amount-prefix">¥</span><input id="singleInstallment" name="singleInstallment" inputmode="decimal" value="${installment}" required></div><small class="avatar-hint">本次还款金额不得高于债务总额。</small></div>
+      </div>
+    </fieldset>
+    <div class="form-error" id="formError"></div>
+    <div class="form-footer">${debt?`<button type="button" class="danger-btn" data-action="delete-debt" data-id="${htmlSafe(debt.id)}">删除债务</button>`:'<span></span>'}<div class="form-footer-right"><button type="button" class="secondary-btn close-modal">取消</button><button type="submit" class="primary-btn">保存债务</button></div></div>
+  </form>`,'debt');
+  updateDebtPayoffPreview();
+}
+function syncDebtPaymentFields(periodic) {
+  const periodicFields=$('#periodicDebtFields',modalBody),singleFields=$('#singleDebtFields',modalBody);
+  if(periodicFields){periodicFields.hidden=!periodic;periodicFields.disabled=!periodic;}
+  if(singleFields){singleFields.hidden=periodic;singleFields.disabled=periodic;}
   updateDebtPayoffPreview();
 }
 function updateDebtPayoffPreview() {
   const preview=$('#debtPayoffPreview',modalBody),form=$('#debtForm',modalBody);if(!preview||!form)return;
-  const data=new FormData(form),totalCents=parseMoney(data.get('total')),installmentCents=parseMoney(data.get('installment')),periodic=data.get('periodic')==='yes',due=periodic?data.get('firstDueDate'):data.get('dueDate');
+  const data=new FormData(form),periodic=data.get('periodic')==='yes';
+  preview.hidden=!periodic;if(!periodic)return;
+  const totalCents=parseMoney(data.get('total')),installmentCents=parseMoney(data.get('periodicInstallment')),due=data.get('firstDueDate');
   if(totalCents===null||installmentCents===null||!dateIsValid(due)){preview.textContent='填写有效金额和还款日期后显示预计还清日期。';return;}
+  if(installmentCents>totalCents){preview.textContent='每次还款金额不能高于债务总额。';return;}
   const estimated=Core.debtScheduleState({id:'preview',totalCents,firstDueDate:due,periodic,frequency:Number(data.get('frequency'))||1,unit:data.get('unit')||'month',installmentCents},[]).payoffDate;
-  preview.textContent=`预计还清日期：${formatDate(estimated,{year:'numeric',month:'long',day:'numeric'})}${periodic?'（按设定的还款频率计算）':''}`;
+  preview.textContent=estimated?`预计还清日期：${formatDate(estimated,{year:'numeric',month:'long',day:'numeric'})}（按设定的还款频率计算）`:'填写有效金额和还款日期后显示预计还清日期。';
 }
 function openRepaymentModal(debtId) {
   const debt=state.debts.find(d=>d.id===debtId);if(!debt||debt.remainingCents<=0)return;
@@ -716,10 +757,8 @@ modalBody.addEventListener('change',async e=>{
   }
   if(e.target.id==='assetKind')$('#assetCustomField',modalBody).hidden=e.target.value!=='custom';
   if(e.target.id==='debtKind')$('#debtCustomField',modalBody).hidden=e.target.value!=='custom';
-  if(e.target.id==='debtPeriodic'){
-    const periodic=e.target.value==='yes';$('#periodicDebtFields',modalBody).hidden=!periodic;$('#singleDebtFields',modalBody).hidden=periodic;updateDebtPayoffPreview();
-  }
-  if(['debtFirstDate','debtDueDate','debtFrequency','debtUnit','debtInstallment','debtTotal'].includes(e.target.id))updateDebtPayoffPreview();
+  if(e.target.id==='debtPeriodic')syncDebtPaymentFields(e.target.value==='yes');
+  if(['debtFirstDate','debtFrequency','debtUnit','periodicInstallment','debtTotal'].includes(e.target.id))updateDebtPayoffPreview();
   if(e.target.id==='transactionType'){const type=e.target.value;const groups=categoryGroups(type);selectedCategoryGroup=groups[0]||'';selectedCategoryId=state.categories.find(c=>c.type===type&&c.group===selectedCategoryGroup)?.id||'';$('#categoryPicker').innerHTML=renderCategoryPicker(type);}
   if(e.target.id==='newCategoryType'){const groups=categoryGroups(e.target.value);const sel=$('#newCategoryGroup');sel.innerHTML=groups.map(g=>`<option value="${htmlSafe(g)}">${htmlSafe(g)}</option>`).join('')+'<option value="__new__">＋ 新建分类组</option>';$('#newGroupField').hidden=true;}
   if(e.target.id==='newCategoryGroup')$('#newGroupField').hidden=e.target.value!=='__new__';
@@ -772,11 +811,11 @@ modalBody.addEventListener('submit',async e=>{
     closeModal();await commit(incoming?'转入已完成；没有生成收入或支出记录':'转出已完成；没有生成收入或支出记录');return;
   }
   if(form.id==='debtForm'){
-    const data=new FormData(form),kind=String(data.get('kind')||'other'),meta=debtKinds.find(k=>k.id===kind)||debtKinds.find(k=>k.id==='other'),category=kind==='custom'?String(data.get('category')||'').trim():meta.name,name=String(data.get('name')||'').trim(),detail=String(data.get('detail')||'').trim(),totalCents=parseMoney(data.get('total')),installmentCents=parseMoney(data.get('installment')),periodic=data.get('periodic')==='yes',firstDueDate=String(periodic?data.get('firstDueDate'):data.get('dueDate')||''),frequency=Number(data.get('frequency')),unit=String(data.get('unit')||'month'),id=form.dataset.id||`debt_${crypto.randomUUID()}`,existing=state.debts.find(d=>d.id===id);
+    const data=new FormData(form),kind=String(data.get('kind')||'other'),meta=debtKinds.find(k=>k.id===kind)||debtKinds.find(k=>k.id==='other'),category=kind==='custom'?String(data.get('category')||'').trim():meta.name,name=String(data.get('name')||'').trim(),detail=String(data.get('detail')||'').trim(),totalCents=parseMoney(data.get('total')),periodic=data.get('periodic')==='yes',installmentCents=parseMoney(data.get(periodic?'periodicInstallment':'singleInstallment')),firstDueDate=String(periodic?data.get('firstDueDate'):data.get('dueDate')||''),frequency=Number(data.get('frequency')),unit=String(data.get('unit')||'month'),id=form.dataset.id||`debt_${crypto.randomUUID()}`,existing=state.debts.find(d=>d.id===id);
     if(kind==='custom'&&!category){error.textContent='请填写自定义债务类别名称。';return;}
     if(!name){error.textContent='请填写债务名称。';return;}
     if(totalCents===null||installmentCents===null){error.textContent='债务总额和还款金额须大于 0，最多填写两位小数。';return;}
-    if(!periodic&&installmentCents>totalCents){error.textContent='单次还款金额不能高于债务总额。';return;}
+    if(installmentCents>totalCents){error.textContent='每次还款金额不能高于债务总额。';return;}
     if(!dateIsValid(firstDueDate)){error.textContent='请选择有效的还款日期。';return;}
     if(periodic&&(!Number.isInteger(frequency)||frequency<1||frequency>3650||!['day','week','month'].includes(unit))){error.textContent='请填写有效的周期频率和单位。';return;}
     const paid=(state.debtPayments||[]).filter(p=>p.debtId===id&&!p.reversedAt).reduce((sum,p)=>sum+p.amountCents,0);

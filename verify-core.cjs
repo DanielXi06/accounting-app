@@ -63,6 +63,11 @@ const debtSchedule = core.debtScheduleState(debtPlan, [
 assert.equal(debtSchedule.remainingCents, 5000);
 assert.equal(debtSchedule.nextDueDate, '2026-03-31');
 assert.equal(debtSchedule.payoffDate, '2026-04-30');
+assert.deepEqual(core.debtScheduledDates({ ...debtPlan, remainingCents: debtSchedule.remainingCents, nextDueDate: debtSchedule.nextDueDate }), ['2026-03-31', '2026-04-30'], 'calendar dates include every remaining installment');
+assert.deepEqual(core.debtScheduledDates({ ...debtPlan, remainingCents: 6000, nextDueDate: '2026-03-31' }), ['2026-03-31', '2026-04-30', '2026-05-31'], 'a partial final installment still gets a calendar date');
+assert.deepEqual(core.debtScheduledDates({ ...debtPlan, remainingCents: 6000, nextDueDate: '2026-03-31' }, '2026-04-01', '2026-05-31'), ['2026-04-30', '2026-05-31'], 'calendar range lookup jumps directly to the visible monthly installments');
+assert.equal(core.debtScheduleState({ ...debtPlan, periodic: false }, []).payoffDate, null, 'one-time debt has no recurring payoff forecast');
+assert.deepEqual(core.debtScheduledDates({ ...debtPlan, periodic: false, remainingCents: 5000, nextDueDate: '2026-03-31' }), ['2026-03-31'], 'one-time debt marks only its next payment date');
 assert.equal(core.daysBetween('2026-10-09', '2026-10-12'), 3);
 
 const categories = [{ id: 'food', type: 'expense', group: '生活', name: '餐饮', icon: '🍜' }];

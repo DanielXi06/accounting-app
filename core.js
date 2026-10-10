@@ -68,10 +68,35 @@
       :debt.firstDueDate;
     const installment=Math.max(1,Number(debt.installmentCents)||remainingCents||1);
     const paymentCount=Math.max(1,Math.ceil(remainingCents/installment));
-    const payoffDate=remainingCents<=0?null:(debt.periodic
-      ?Array.from({length:paymentCount-1}).reduce(date=>advancePaymentDate(date,debt.frequency,debt.unit,anchorDay),nextDueDate)
-      :nextDueDate);
+    const payoffDate=remainingCents<=0||!debt.periodic?null:
+      Array.from({length:paymentCount-1}).reduce(date=>advancePaymentDate(date,debt.frequency,debt.unit,anchorDay),nextDueDate);
     return {remainingCents,nextDueDate,payoffDate,paidCount:active.length,activePayments:active};
+  }
+  function debtScheduledDates(debt,rangeStart,rangeEnd) {
+    if(!(Number(debt?.remainingCents)>0)||!debt?.nextDueDate)return [];
+    const installment=Math.max(1,Number(debt.installmentCents)||debt.remainingCents);
+    const count=debt.periodic?Math.ceil(debt.remainingCents/installment):1;
+    const anchorDay=dateFromKey(debt.firstDueDate||debt.nextDueDate).getDate();
+    let index=0,date=debt.nextDueDate;
+    if(rangeEnd&&date>rangeEnd)return [];
+    if(rangeStart&&date<rangeStart&&debt.periodic){
+      if(debt.unit==='day'||debt.unit==='week'){
+        const interval=Math.max(1,Math.floor(Number(debt.frequency)||1))*(debt.unit==='week'?7:1);
+        index=Math.floor(daysBetween(date,rangeStart)/interval);
+        date=shiftDate(date,index*interval);
+      }else if(debt.unit==='month'){
+        const startDate=dateFromKey(rangeStart),dueDate=dateFromKey(date),months=(startDate.getFullYear()-dueDate.getFullYear())*12+startDate.getMonth()-dueDate.getMonth();
+        index=Math.floor(Math.max(0,months)/Math.max(1,Math.floor(Number(debt.frequency)||1)));
+        date=advancePaymentDate(date,index*debt.frequency,'month',anchorDay);
+      }
+      while(date<rangeStart&&index<count){index++;date=advancePaymentDate(date,debt.frequency,debt.unit,anchorDay);}
+    }
+    const dates=[];
+    for(;index<count&&(!rangeEnd||date<=rangeEnd);index++){
+      if(!rangeStart||date>=rangeStart)dates.push(date);
+      if(debt.periodic)date=advancePaymentDate(date,debt.frequency,debt.unit,anchorDay);
+    }
+    return dates;
   }
   function daysBetween(start,end) { return Math.round((dateFromKey(end)-dateFromKey(start))/DAY_MS); }
   function periodForYear(year,today) {
@@ -99,5 +124,5 @@
     }
     return Array.from({length:n},(_,i)=>{const key=shiftDate(anchor,i-(n-1));return {start:key,end:key,label:rangeDate(key,false),title:rangeDate(key)};});
   }
-  root.LedgerCore=Object.freeze({DAY_MS,localDateKey,dateFromKey,shiftDate,shiftMonth,daysInMonth,daysRemainingInMonth,monthKey,mondayOf,parseMoney,sumRecords,groupRecords,recordsInRange,dailyBudget,dailyBudgetForDate,budgetMeter,advancePaymentDate,debtScheduleState,daysBetween,periodForYear,periodForMonth,periodForWeek,trendPeriods});
+  root.LedgerCore=Object.freeze({DAY_MS,localDateKey,dateFromKey,shiftDate,shiftMonth,daysInMonth,daysRemainingInMonth,monthKey,mondayOf,parseMoney,sumRecords,groupRecords,recordsInRange,dailyBudget,dailyBudgetForDate,budgetMeter,advancePaymentDate,debtScheduleState,debtScheduledDates,daysBetween,periodForYear,periodForMonth,periodForWeek,trendPeriods});
 })(globalThis);
