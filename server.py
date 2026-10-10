@@ -24,10 +24,12 @@ DEFAULT_DB = PRIVATE_DIR / "accounts.sqlite3"
 SESSION_COOKIE = "qingzhang_session"
 SESSION_SECONDS = 60 * 60 * 24 * 30
 PBKDF2_ROUNDS = 310_000
-MAX_BODY_BYTES = 8 * 1024 * 1024
+MAX_BODY_BYTES = 16 * 1024 * 1024
 MAX_RECORDS = 50_000
-MAX_AVATAR_BYTES = 1_000_000
+MAX_AVATAR_BYTES = 8 * 1024 * 1024
 AVATAR_PRESETS = {"person", "leaf", "sun", "moon", "star", "flower", "heart", "music", "wave", "mountain"}
+ASSET_KINDS = {"cash", "bank", "credit", "wallet", "investment", "brokerage", "property", "receivable", "other", "custom"}
+DEBT_KINDS = {"personal", "mortgage", "auto", "consumer", "education", "business", "family", "other", "custom"}
 
 
 class ApiError(Exception):
@@ -81,7 +83,7 @@ def initialize_database(db_path: Path) -> None:
 
 
 def empty_state() -> dict:
-    return {"version": 1, "categories": [], "transactions": [], "monthBudgets": {}, "dayBudgets": {}}
+    return {"version": 1, "categories": [], "transactions": [], "monthBudgets": {}, "dayBudgets": {}, "assets": [], "debts": [], "debtPayments": []}
 
 
 def _text(obj: dict, key: str, limit: int, *, required: bool = True) -> str:
@@ -105,7 +107,7 @@ def _safe_cents(value, *, positive: bool) -> int:
 
 
 def _validated_avatar(value) -> str:
-    if not isinstance(value, str) or len(value) > 1_400_000:
+    if not isinstance(value, str) or len(value) > 12_000_000:
         raise ApiError(400, "头像数据格式不正确或文件过大。")
     if not value:
         return ""
@@ -122,7 +124,7 @@ def _validated_avatar(value) -> str:
     except (ValueError, binascii.Error):
         raise ApiError(400, "头像图片数据无效。") from None
     if not image or len(image) > MAX_AVATAR_BYTES:
-        raise ApiError(400, "头像图片不能超过 1 MB。")
+        raise ApiError(400, "头像图片不能超过 8 MB。")
     signatures = {
         "png": image.startswith(b"\x89PNG\r\n\x1a\n"),
         "jpeg": image.startswith(b"\xff\xd8\xff"),
@@ -169,6 +171,91 @@ def validate_state(value) -> dict:
         category_types[category["id"]] = category["type"]
         clean_categories.append(category)
 
+    raw_assets = value.get("assets", [])
+    if not isinstance(raw_assets, list) or len(raw_assets) > 5_000:
+        raise ApiError(400, "资产账户数量超出限制。")
+    clean_assets = []
+    asset_ids = set()
+    for item in raw_assets:
+        if not isinstance(item, dict):
+            raise ApiError(400, "资产账户数据格式不正确。")
+        asset = {
+            "id": _text(item, "id", 100),
+            "kind": _text(item, "kind", 24),
+            "category": _text(item, "category", 48),
+            "name": _text(item, "name", 48),
+            "detail": _text(item, "detail", 80, required=False),
+            "icon": _text(item, "icon", 24),
+            "tone": _text(item, "tone", 16),
+            "balanceCents": _safe_cents(item.get("balanceCents"), positive=False),
+            "createdAt": item.get("createdAt", 0),
+            "updatedAt": item.get("updatedAt", 0),
+        }
+        if asset["kind"] not in ASSET_KINDS or asset["id"] in asset_ids:
+            raise ApiError(400, "资产类别无效或账户 ID 重复。")
+        for timestamp in (asset["createdAt"], asset["updatedAt"]):
+            if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)):
+                raise ApiError(400, "资产账户时间格式不正确。")
+        asset_ids.add(asset["id"])
+        clean_assets.append(asset)
+
+    raw_debts = value.get("debts", [])
+    if not isinstance(raw_debts, list) or len(raw_debts) > 5_000:
+        raise ApiError(400, "债务数量超出限制。")
+    clean_debts = []
+    debt_ids = set()
+    for item in raw_debts:
+        if not isinstance(item, dict):
+            raise ApiError(400, "债务数据格式不正确。")
+        debt = {
+            "id": _text(item, "id", 100),
+            "kind": _text(item, "kind", 24),
+            "category": _text(item, "category", 48),
+            "name": _text(item, "name", 48),
+            "detail": _text(item, "detail", 80, required=False),
+            "icon": _text(item, "icon", 24),
+            "tone": _text(item, "tone", 16),
+            "totalCents": _safe_cents(item.get("totalCents"), positive=True),
+            "remainingCents": _safe_cents(item.get("remainingCents"), positive=False),
+            "periodic": item.get("periodic"),
+            "firstDueDate": _text(item, "firstDueDate", 10),
+            "nextDueDate": _text(item, "nextDueDate", 10),
+            "frequency": item.get("frequency"),
+            "unit": _text(item, "unit", 8),
+            "installmentCents": _safe_cents(item.get("installmentCents"), positive=True),
+            "expectedPayoffDate": item.get("expectedPayoffDate"),
+            "createdAt": item.get("createdAt", 0),
+            "updatedAt": item.get("updatedAt", 0),
+        }
+        if debt["kind"] not in DEBT_KINDS or debt["id"] in debt_ids:
+            raise ApiError(400, "债务类别无效或债务 ID 重复。")
+        if not isinstance(debt["periodic"], bool) or debt["remainingCents"] > debt["totalCents"]:
+            raise ApiError(400, "债务金额或还款周期设置无效。")
+        if not isinstance(debt["frequency"], int) or isinstance(debt["frequency"], bool) or not 1 <= debt["frequency"] <= 3650:
+            raise ApiError(400, "还款周期频率无效。")
+        if debt["unit"] not in {"day", "week", "month"} or (not debt["periodic"] and debt["installmentCents"] > debt["totalCents"]):
+            raise ApiError(400, "还款周期单位或单次金额无效。")
+        for key in ("firstDueDate", "nextDueDate"):
+            try:
+                if date.fromisoformat(debt[key]).isoformat() != debt[key]:
+                    raise ValueError
+            except ValueError:
+                raise ApiError(400, "债务还款日期无效。") from None
+        payoff = debt["expectedPayoffDate"]
+        if payoff is not None:
+            if not isinstance(payoff, str):
+                raise ApiError(400, "预计还清日期格式不正确。")
+            try:
+                if date.fromisoformat(payoff).isoformat() != payoff:
+                    raise ValueError
+            except ValueError:
+                raise ApiError(400, "预计还清日期无效。") from None
+        for timestamp in (debt["createdAt"], debt["updatedAt"]):
+            if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)):
+                raise ApiError(400, "债务时间格式不正确。")
+        debt_ids.add(debt["id"])
+        clean_debts.append(debt)
+
     clean_transactions = []
     transaction_ids = set()
     for item in transactions:
@@ -185,6 +272,14 @@ def validate_state(value) -> dict:
             "createdAt": item.get("createdAt", 0),
             "updatedAt": item.get("updatedAt", 0),
         }
+        account_id = item.get("accountId", "")
+        payment_id = item.get("debtPaymentId", "")
+        if account_id:
+            tx["accountId"] = _text(item, "accountId", 100)
+            if tx["accountId"] not in asset_ids:
+                raise ApiError(400, "收支记录关联的账户不存在。")
+        if payment_id:
+            tx["debtPaymentId"] = _text(item, "debtPaymentId", 100)
         if tx["type"] not in ("expense", "income") or tx["id"] in transaction_ids:
             raise ApiError(400, "收支类型无效或记录 ID 重复。")
         if category_types.get(tx["categoryId"]) != tx["type"]:
@@ -197,8 +292,54 @@ def validate_state(value) -> dict:
         for timestamp in (tx["createdAt"], tx["updatedAt"]):
             if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)):
                 raise ApiError(400, "记录时间格式不正确。")
+        if item.get("voidedAt") is not None:
+            if isinstance(item["voidedAt"], bool) or not isinstance(item["voidedAt"], (int, float)):
+                raise ApiError(400, "记录撤销时间格式不正确。")
+            tx["voidedAt"] = item["voidedAt"]
         transaction_ids.add(tx["id"])
         clean_transactions.append(tx)
+
+    raw_payments = value.get("debtPayments", [])
+    if not isinstance(raw_payments, list) or len(raw_payments) > MAX_RECORDS:
+        raise ApiError(400, "还款记录数量超出限制。")
+    clean_payments = []
+    payment_ids = set()
+    tx_by_id = {item["id"]: item for item in clean_transactions}
+    for item in raw_payments:
+        if not isinstance(item, dict):
+            raise ApiError(400, "还款记录格式不正确。")
+        payment = {
+            "id": _text(item, "id", 100),
+            "debtId": _text(item, "debtId", 100),
+            "transactionId": _text(item, "transactionId", 100),
+            "date": _text(item, "date", 10),
+            "amountCents": _safe_cents(item.get("amountCents"), positive=True),
+            "createdAt": item.get("createdAt", 0),
+            "updatedAt": item.get("updatedAt", 0),
+            "reversedAt": item.get("reversedAt"),
+        }
+        account_id = item.get("accountId", "")
+        if account_id:
+            payment["accountId"] = _text(item, "accountId", 100)
+            if payment["accountId"] not in asset_ids:
+                raise ApiError(400, "还款记录关联的账户不存在。")
+        if payment["id"] in payment_ids or payment["debtId"] not in debt_ids:
+            raise ApiError(400, "还款记录 ID 重复或引用的债务不存在。")
+        tx = tx_by_id.get(payment["transactionId"])
+        if not tx or tx.get("debtPaymentId") != payment["id"] or tx["type"] != "expense" or tx["amountCents"] != payment["amountCents"]:
+            raise ApiError(400, "还款记录关联的支出记录无效。")
+        try:
+            if date.fromisoformat(payment["date"]).isoformat() != payment["date"]:
+                raise ValueError
+        except ValueError:
+            raise ApiError(400, "还款日期无效。") from None
+        for timestamp in (payment["createdAt"], payment["updatedAt"]):
+            if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)):
+                raise ApiError(400, "还款记录时间格式不正确。")
+        if payment["reversedAt"] is not None and (isinstance(payment["reversedAt"], bool) or not isinstance(payment["reversedAt"], (int, float))):
+            raise ApiError(400, "还款撤回时间格式不正确。")
+        payment_ids.add(payment["id"])
+        clean_payments.append(payment)
 
     clean_month_budgets = {}
     for key, amount in month_budgets.items():
@@ -223,6 +364,9 @@ def validate_state(value) -> dict:
         "transactions": clean_transactions,
         "monthBudgets": clean_month_budgets,
         "dayBudgets": clean_day_budgets,
+        "assets": clean_assets,
+        "debts": clean_debts,
+        "debtPayments": clean_payments,
     }
 
 

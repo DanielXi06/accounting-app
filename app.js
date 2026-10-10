@@ -6,6 +6,16 @@ const {localDateKey,dateFromKey,shiftDate,shiftMonth,monthKey,mondayOf,parseMone
 const TODAY = localDateKey(new Date());
 const moneyFormatter = new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const palette = ['#647eea','#e57669','#4aad86','#e6ad56','#8b72d8','#45a9bb','#e28ab2','#93a750','#e18b4d','#7388a2','#cf6f9c','#5d9fd4'];
+const assetKinds=[
+  {id:'cash',name:'零钱',icon:'💵',tone:'mint'},{id:'bank',name:'储蓄卡',icon:'🏦',tone:'blue'},{id:'credit',name:'信用卡',icon:'💳',tone:'rose'},
+  {id:'wallet',name:'电子钱包',icon:'📱',tone:'violet'},{id:'investment',name:'储蓄/理财',icon:'💰',tone:'gold'},{id:'brokerage',name:'证券账户',icon:'📈',tone:'cyan'},
+  {id:'property',name:'房产',icon:'🏠',tone:'orange'},{id:'receivable',name:'应收款',icon:'🤝',tone:'green'},{id:'other',name:'其他资产',icon:'📦',tone:'slate'},{id:'custom',name:'自定义类别',icon:'✳️',tone:'slate'}
+];
+const debtKinds=[
+  {id:'personal',name:'个人借款',icon:'🤝',tone:'rose'},{id:'mortgage',name:'房贷',icon:'🏠',tone:'blue'},{id:'auto',name:'车贷',icon:'🚗',tone:'orange'},
+  {id:'consumer',name:'消费分期',icon:'🧾',tone:'violet'},{id:'education',name:'助学贷款',icon:'🎓',tone:'cyan'},{id:'business',name:'经营借款',icon:'🏢',tone:'gold'},
+  {id:'family',name:'亲友借款',icon:'💬',tone:'green'},{id:'other',name:'其他债务',icon:'📦',tone:'slate'},{id:'custom',name:'自定义类别',icon:'✳️',tone:'slate'}
+];
 const iconChoices = ['🍜','🥬','🧻','🏠','🔑','🏦','💡','📶','🚇','🚌','🚕','🚗','🩺','💊','🏃','👕','💄','🎓','📚','💻','🎬','✈️','🍻','🎁','🐾','👨‍👩‍👧','🍼','🖇️','🧳','🛡️','🧾','💝','💰','🎉','🪙','↩️','🧺','⭐'];
 const avatarPresets = [
   {id:'person',name:'简约',symbol:'♙',background:'#edf1ff',color:'#4868df'},
@@ -33,7 +43,8 @@ const incomeSeeds = [
 ];
 const seedCategories = [
   ...expenseSeeds.map((c,i)=>({id:`seed_e_${String(i).padStart(2,'0')}`,type:'expense',group:c[0],name:c[1],icon:c[2],builtin:true})),
-  ...incomeSeeds.map((c,i)=>({id:`seed_i_${String(i).padStart(2,'0')}`,type:'income',group:c[0],name:c[1],icon:c[2],builtin:true}))
+  ...incomeSeeds.map((c,i)=>({id:`seed_i_${String(i).padStart(2,'0')}`,type:'income',group:c[0],name:c[1],icon:c[2],builtin:true})),
+  {id:'seed_e_debt',type:'expense',group:'财务',name:'债务还款',icon:'💳',builtin:true}
 ];
 
 function formatDate(key, opts={}) { const d=dateFromKey(key); return new Intl.DateTimeFormat('zh-CN',opts).format(d); }
@@ -76,7 +87,7 @@ async function apiRequest(path,options={}) {
   if(!response.ok) {const error=new Error(payload.error||`账户服务返回 ${response.status}`);error.status=response.status;error.payload=payload;throw error;}
   return payload;
 }
-function emptyState() { return {version:1,categories:seedCategories.map(c=>({...c})),transactions:[],monthBudgets:{},dayBudgets:{}}; }
+function emptyState() { return {version:1,categories:seedCategories.map(c=>({...c})),transactions:[],monthBudgets:{},dayBudgets:{},assets:[],debts:[],debtPayments:[]}; }
 let state=emptyState();
 let account=null;
 let accountBase=null;
@@ -84,29 +95,45 @@ let page='calendar', calendarView='month', selectedDate=TODAY;
 let statsPeriod='month', selectedYear=Number(TODAY.slice(0,4)), selectedMonth=monthKey(TODAY), selectedWeekDate=TODAY;
 let trendCounts={year:10,month:8,week:14}, trendCustom={year:false,month:false,week:false}, seriesVisible={expense:true,income:true,net:true};
 let selectedCategoryGroup='', selectedCategoryId='';
-let activeModal=null, categoryReturnDraft=null, avatarEditorValue='preset:person';
+let activeModal=null, categoryReturnDraft=null, avatarEditorValue='preset:person', avatarCropImage=null, avatarCropZoom=1, avatarCropX=0, avatarCropY=0, avatarCropDrag=null;
 const main=$('#mainView'), modalBackdrop=$('#modalBackdrop'), modalBody=$('#modalBody');
 
 function normalizeState(saved) {
   if(!saved||typeof saved!=='object')return emptyState();
   return {
     ...emptyState(),...saved,
-    categories:Array.isArray(saved.categories)&&saved.categories.length?saved.categories:seedCategories.map(c=>({...c})),
+    categories:[...seedCategories.map(c=>({...c})),...(Array.isArray(saved.categories)?saved.categories.filter(c=>!seedCategories.some(seed=>seed.id===c.id)):[])],
     transactions:Array.isArray(saved.transactions)?saved.transactions:[],
     monthBudgets:saved.monthBudgets&&typeof saved.monthBudgets==='object'?saved.monthBudgets:{},
     dayBudgets:saved.dayBudgets&&typeof saved.dayBudgets==='object'?saved.dayBudgets:{},
+    assets:Array.isArray(saved.assets)?saved.assets:[],
+    debts:Array.isArray(saved.debts)?saved.debts:[],
+    debtPayments:Array.isArray(saved.debtPayments)?saved.debtPayments:[],
   };
 }
 function cloneState(data) { return JSON.parse(JSON.stringify(data)); }
 function hasUserData(data) {
-  return !!(data?.transactions?.length||Object.keys(data?.monthBudgets||{}).length||Object.keys(data?.dayBudgets||{}).length||data?.categories?.some(c=>!c.builtin));
+  return !!(data?.transactions?.length||data?.assets?.length||data?.debts?.length||data?.debtPayments?.length||Object.keys(data?.monthBudgets||{}).length||Object.keys(data?.dayBudgets||{}).length||data?.categories?.some(c=>!c.builtin));
+}
+function mergeEntities(remote=[],local=[],base=[]) {
+  const before=new Map(base.map(x=>[x.id,x])),mine=new Map(local.map(x=>[x.id,x])),theirs=new Map(remote.map(x=>[x.id,x])),out=[];
+  const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+  for(const id of new Set([...before.keys(),...mine.keys(),...theirs.keys()])){
+    const b=before.get(id),l=mine.get(id),r=theirs.get(id);
+    if(!l){if(!b&&r)out.push(r);else if(b&&r&&!same(b,r))out.push(r);continue;}
+    if(!r){if(!b||!same(l,b))out.push(l);continue;}
+    if(!b){out.push((l.updatedAt||l.createdAt||0)>(r.updatedAt||r.createdAt||0)?l:r);continue;}
+    const lc=!same(l,b),rc=!same(r,b);out.push(!lc?r:!rc?l:(l.updatedAt||l.createdAt||0)>=(r.updatedAt||r.createdAt||0)?l:r);
+  }
+  return out;
 }
 function mergeAccountData(remote,local) {
   const categories=[...(remote.categories||[])], categoryIds=new Set(categories.map(c=>c.id));
   for(const category of local.categories||[])if(!categoryIds.has(category.id)){categories.push(category);categoryIds.add(category.id);}
   const transactions=new Map((remote.transactions||[]).map(t=>[t.id,t]));
   for(const transaction of local.transactions||[]){const previous=transactions.get(transaction.id);if(!previous||(transaction.updatedAt||0)>(previous.updatedAt||0))transactions.set(transaction.id,transaction);}
-  return {version:1,categories,transactions:[...transactions.values()],monthBudgets:{...(local.monthBudgets||{}),...(remote.monthBudgets||{})},dayBudgets:{...(local.dayBudgets||{}),...(remote.dayBudgets||{})}};
+  const newest=(a,b)=>mergeEntities(a,b,[]);
+  return {version:1,categories,transactions:[...transactions.values()],monthBudgets:{...(local.monthBudgets||{}),...(remote.monthBudgets||{})},dayBudgets:{...(local.dayBudgets||{}),...(remote.dayBudgets||{})},assets:newest(remote.assets||[],local.assets||[]),debts:newest(remote.debts||[],local.debts||[]),debtPayments:newest(remote.debtPayments||[],local.debtPayments||[])};
 }
 function mergeConcurrentAccountData(base,local,remote) {
   const categories=[...(remote.categories||[])],categoryIds=new Set(categories.map(c=>c.id));
@@ -132,7 +159,7 @@ function mergeConcurrentAccountData(base,local,remote) {
     }
     return merged;
   }
-  return {version:1,categories,transactions,monthBudgets:mergeBudgets(base?.monthBudgets,local.monthBudgets,remote.monthBudgets),dayBudgets:mergeBudgets(base?.dayBudgets,local.dayBudgets,remote.dayBudgets)};
+  return {version:1,categories,transactions,monthBudgets:mergeBudgets(base?.monthBudgets,local.monthBudgets,remote.monthBudgets),dayBudgets:mergeBudgets(base?.dayBudgets,local.dayBudgets,remote.dayBudgets),assets:mergeEntities(remote.assets||[],local.assets||[],base?.assets||[]),debts:mergeEntities(remote.debts||[],local.debts||[],base?.debts||[]),debtPayments:mergeEntities(remote.debtPayments||[],local.debtPayments||[],base?.debtPayments||[])};
 }
 async function saveAccountChanges() {
   const local=cloneState(state);
@@ -178,7 +205,43 @@ function avatarChoicesMarkup(value) {
 
 function currentDateLabel(key) { return formatDate(key,{year:'numeric',month:'long',day:'numeric',weekday:'long'}); }
 function getCategory(id) { return state.categories.find(c=>c.id===id)||{id:'missing',type:'expense',group:'其他',name:'已移除分类',icon:'❔'}; }
-function recordsOn(key) { return state.transactions.filter(t=>t.date===key).sort((a,b)=>(b.updatedAt||b.createdAt||0)-(a.updatedAt||a.createdAt||0)); }
+function assetKind(item) { return assetKinds.find(k=>k.id===item?.kind)||{id:item?.kind||'custom',name:item?.category||'其他资产',icon:item?.icon||'📦',tone:'slate'}; }
+function activeDebts() { return state.debts.filter(d=>(Number(d.remainingCents)||0)>0).sort((a,b)=>(a.nextDueDate||a.firstDueDate).localeCompare(b.nextDueDate||b.firstDueDate)); }
+function recalculateDebt(debt) {
+  const schedule=Core.debtScheduleState(debt,state.debtPayments||[]);
+  debt.remainingCents=schedule.remainingCents;debt.nextDueDate=schedule.nextDueDate;debt.expectedPayoffDate=schedule.payoffDate;debt.updatedAt=Date.now();return schedule;
+}
+function assetBalanceImpact(record,direction=1) {
+  const asset=state.assets.find(a=>a.id===record?.accountId);if(!asset)return;
+  const credit=asset.kind==='credit',increase=(record.type==='income')!==credit;
+  asset.balanceCents=(Number(asset.balanceCents)||0)+(increase?1:-1)*record.amountCents*direction;asset.updatedAt=Date.now();
+}
+function upsertTransaction(record,existing) {
+  if(existing)assetBalanceImpact(existing,-1);
+  assetBalanceImpact(record,1);
+  if(existing)state.transactions=state.transactions.map(r=>r.id===record.id?record:r);else state.transactions.push(record);
+}
+function removeTransaction(id) {
+  const record=state.transactions.find(r=>r.id===id);if(record)assetBalanceImpact(record,-1);
+  state.transactions=state.transactions.filter(r=>r.id!==id);
+}
+function voidTransaction(id) {
+  const record=state.transactions.find(r=>r.id===id);if(record&&!record.voidedAt){assetBalanceImpact(record,-1);record.voidedAt=Date.now();record.updatedAt=record.voidedAt;}
+}
+async function undoRepayment(paymentId) {
+  const payment=state.debtPayments.find(p=>p.id===paymentId);if(!payment||payment.reversedAt)return;
+  payment.reversedAt=Date.now();payment.updatedAt=payment.reversedAt;
+  voidTransaction(payment.transactionId);
+  const debt=state.debts.find(d=>d.id===payment.debtId);if(debt)recalculateDebt(debt);
+  closeModal();await commit('已撤回还款；债务提醒和账户余额已恢复');
+}
+function totalAssetAmounts() {
+  const gross=state.assets.reduce((sum,a)=>sum+(a.kind==='credit'?Math.max(0,-a.balanceCents):a.balanceCents),0);
+  const cardDebt=state.assets.filter(a=>a.kind==='credit').reduce((sum,a)=>sum+Math.max(0,a.balanceCents),0);
+  const loanDebt=activeDebts().reduce((sum,d)=>sum+d.remainingCents,0);
+  return {gross,liabilities:cardDebt+loanDebt,net:gross-cardDebt-loanDebt};
+}
+function recordsOn(key) { return state.transactions.filter(t=>!t.voidedAt&&t.date===key).sort((a,b)=>(b.updatedAt||b.createdAt||0)-(a.updatedAt||a.createdAt||0)); }
 function allOnDate(key) { return recordsOn(key); }
 function dailyBudgetContext(key) {
   const mk=monthKey(key),monthBudget=state.monthBudgets[mk]||0;
@@ -210,17 +273,18 @@ function calendarHeaderTitle() {
 }
 function calendarSummary(key) { const rs=allOnDate(key); return {expense:sumRecords(rs,'expense'),income:sumRecords(rs,'income')}; }
 function calendarCell(key,currentMonth,weekMode=false) {
-  const d=dateFromKey(key), summary=calendarSummary(key), outside=currentMonth && monthKey(key)!==currentMonth;
+  const d=dateFromKey(key), summary=calendarSummary(key), outside=currentMonth && monthKey(key)!==currentMonth,dueCount=activeDebts().filter(debt=>debt.nextDueDate===key).length;
   const classes=['calendar-cell',outside?'outside':'',key===TODAY?'today':'',key===selectedDate?'selected':'',weekMode?'week-cell':''].filter(Boolean).join(' ');
   return `<button class="${classes}" data-date="${key}" aria-label="${currentDateLabel(key)}，支出 ${fmtMoney(summary.expense)}，收入 ${fmtMoney(summary.income)}">
     <span class="day-number">${d.getDate()}</span>
-    <span class="cell-totals">${summary.expense?`<span class="cell-dot cell-expense">−${amountForCell(summary.expense)}</span>`:''}${summary.income?`<span class="cell-dot cell-income">+${amountForCell(summary.income)}</span>`:''}</span>
+    <span class="cell-totals">${summary.expense?`<span class="cell-dot cell-expense">−${amountForCell(summary.expense)}</span>`:''}${summary.income?`<span class="cell-dot cell-income">+${amountForCell(summary.income)}</span>`:''}${dueCount?`<span class="cell-dot cell-due">还款 ${dueCount}</span>`:''}</span>
   </button>`;
 }
 function calendarCanvas() {
   if(calendarView==='day') {
     const d=dateFromKey(selectedDate), s=calendarSummary(selectedDate);
-    return `<div class="day-canvas"><div class="day-card"><div class="day-big">${d.getDate()}</div><div class="day-meta">${formatDate(selectedDate,{year:'numeric',month:'long',weekday:'long'})}</div><div class="day-flow"><span>收入<b style="color:var(--green)">${fmtMoney(s.income)}</b></span><span>支出<b style="color:var(--red)">${fmtMoney(s.expense)}</b></span></div></div></div>`;
+    const dueCount=activeDebts().filter(debt=>debt.nextDueDate===selectedDate).length;
+    return `<div class="day-canvas"><div class="day-card"><div class="day-big">${d.getDate()}</div><div class="day-meta">${formatDate(selectedDate,{year:'numeric',month:'long',weekday:'long'})}${dueCount?` · ${dueCount} 笔债务到期`:''}</div><div class="day-flow"><span>收入<b style="color:var(--green)">${fmtMoney(s.income)}</b></span><span>支出<b style="color:var(--red)">${fmtMoney(s.expense)}</b></span></div></div></div>`;
   }
   let keys=[];
   if(calendarView==='month') {
@@ -275,8 +339,13 @@ function dailySummaryCard() {
 }
 function recordCard() {
   const records=recordsOn(selectedDate);
-  const content=records.length?`<div class="records-list">${records.map(r=>{const c=getCategory(r.categoryId);return `<button class="record-row" data-action="edit-record" data-id="${htmlSafe(r.id)}"><span class="category-icon">${htmlSafe(c.icon)}</span><span class="record-text"><strong>${htmlSafe(c.name)} · ${htmlSafe(r.content)}</strong><small>${htmlSafe(c.group)}${r.note?` · ${htmlSafe(r.note)}`:''}</small></span><span class="record-amount ${r.type}">${r.type==='expense'?'−':'+'}${fmtMoney(r.amountCents)}</span></button>`;}).join('')}</div>`:`<div class="empty-state">这一天还没有记录。记下第一笔，收支就会出现在日历和统计中。</div>`;
+  const content=records.length?`<div class="records-list">${records.map(r=>{const c=getCategory(r.categoryId),content=`<span class="category-icon">${htmlSafe(c.icon)}</span><span class="record-text"><strong>${htmlSafe(c.name)} · ${htmlSafe(r.content)}</strong><small>${htmlSafe(c.group)}${r.accountId?` · ${htmlSafe(state.assets.find(a=>a.id===r.accountId)?.name||'账户')}`:''}${r.note?` · ${htmlSafe(r.note)}`:''}</small></span><span class="record-amount ${r.type}">${r.type==='expense'?'−':'+'}${fmtMoney(r.amountCents)}</span>`;return r.debtPaymentId?`<div class="record-row repayment-record">${content}<span class="repayment-tag">还款</span></div>`:`<button class="record-row" data-action="edit-record" data-id="${htmlSafe(r.id)}">${content}</button>`;}).join('')}</div>`:`<div class="empty-state">这一天还没有记录。记下第一笔，收支就会出现在日历和统计中。</div>`;
   return `<section class="surface detail-card records-card"><div class="card-heading"><div><h3>当日记录</h3><div class="subheading">${records.length} 笔 · 点击记录即可编辑</div></div></div><div class="record-actions"><button data-action="add-expense">＋ 添加支出</button><button class="income-add" data-action="add-income">＋ 添加收入</button></div><div style="height:8px"></div>${content}</section>`;
+}
+function debtRemindersCard() {
+  const debts=activeDebts();
+  const content=debts.length?`<div class="debt-reminder-list">${debts.map(debt=>{const due=debt.nextDueDate,delta=Core.daysBetween(TODAY,due),when=delta<0?`已逾期 ${Math.abs(delta)} 天`:delta===0?'今天到期':`还剩 ${delta} 天`;return `<div class="debt-reminder ${delta<0?'overdue':''}"><span class="debt-kind-icon">${htmlSafe(debt.icon||'💳')}</span><span class="debt-reminder-text"><strong>${htmlSafe(debt.name)} · ${when}</strong><small>${formatDate(due,{year:'numeric',month:'short',day:'numeric'})} · 剩余 ${fmtMoney(debt.remainingCents)}</small></span><button class="small-button" data-action="repay-debt" data-id="${htmlSafe(debt.id)}">已还款</button></div>`;}).join('')}</div>`:`<div class="empty-state">暂无待还债务。添加债务后会在这里提醒下一次还款日期。</div>`;
+  return `<section class="surface detail-card debt-reminders-card"><div class="card-heading"><div><h3>债务提醒</h3><div class="subheading">显示每笔债务的下一次还款</div></div><button class="small-button" data-action="open-accounts">查看账户</button></div>${content}</section>`;
 }
 function expensePieCard() {
   const rows=groupRecords(recordsOn(selectedDate),'expense'), total=rows.reduce((s,r)=>s+r.amountCents,0);
@@ -285,7 +354,7 @@ function expensePieCard() {
 function renderCalendar() {
   return `<div class="page-heading"><div><h1>日历</h1><p>按天查看收支，让每一笔都有迹可循。</p></div></div>
     <div class="calendar-layout"><section class="surface calendar-surface calendar-main"><div class="calendar-controls"><div class="date-controls"><div class="arrows"><button class="arrow-btn" data-action="calendar-prev" aria-label="上一个">‹</button><button class="arrow-btn" data-action="calendar-next" aria-label="下一个">›</button></div><h2>${calendarHeaderTitle()}</h2><input aria-label="选择日期" class="period-select" style="height:33px;min-width:136px;padding:0 8px" type="date" id="calendarDate" value="${selectedDate}"></div><div class="view-switch" aria-label="日历视图"><button class="${calendarView==='month'?'active':''}" data-view="month">月视图</button><button class="${calendarView==='week'?'active':''}" data-view="week">周视图</button><button class="${calendarView==='day'?'active':''}" data-view="day">日视图</button></div></div>${calendarCanvas()}</section>
-      <aside class="detail-panel">${monthBudgetCard()}${dailySummaryCard()}${recordCard()}${expensePieCard()}</aside></div>`;
+      <aside class="detail-panel">${monthBudgetCard()}${dailySummaryCard()}${recordCard()}${expensePieCard()}${debtRemindersCard()}</aside></div>`;
 }
 
 function getSelectedStatsPeriod() {
@@ -355,10 +424,29 @@ function renderStats() {
       ${trend.length?`<div class="chart-scroll">${trendSvg(trend)}</div>`:`<div class="empty-state">所选范围没有可显示的时间段。</div>`}</section>
     <div class="stats-bottom">${rankCard('支出分类排行',expenseRows,expenseTotal,false)}${rankCard('收入分类排行',incomeRows,incomeTotal,true)}${compositionCard(expenseRows,incomeRows)}</div>`;
 }
+function accountFinanceCard(item,kind,isDebt=false) {
+  const due=isDebt?item.nextDueDate:null,delta=due?Core.daysBetween(TODAY,due):0,header=isDebt?`<span class="finance-type">${htmlSafe(item.category||kind.name)}</span><strong>${htmlSafe(item.name)}</strong>`:`<span class="finance-type">${htmlSafe(kind.name)}</span><strong>${htmlSafe(item.name||kind.name)}</strong>`;
+  const info=item.detail?`<small>补充信息 · ${htmlSafe(item.detail)}</small>`:'';
+  if(!isDebt){
+    const credit=item.kind==='credit',value=Math.abs(item.balanceCents||0),label=credit?(item.balanceCents>=0?'欠款':'溢缴'):item.balanceCents<0?'余额为负':'余额';
+    return `<article class="finance-card tone-${htmlSafe(kind.tone)}" role="button" tabindex="0" data-action="edit-asset" data-id="${htmlSafe(item.id)}"><span class="finance-icon">${htmlSafe(item.icon||kind.icon)}</span><div class="finance-card-copy">${header}${info}</div><div class="finance-amount"><small>${label}</small><strong>${fmtMoney(value)}</strong></div></article>`;
+  }
+  const when=delta<0?`已逾期 ${Math.abs(delta)} 天`:delta===0?'今天到期':`还剩 ${delta} 天`;
+  return `<article class="finance-card debt-finance-card tone-${htmlSafe(kind.tone)}" role="button" tabindex="0" data-action="edit-debt" data-id="${htmlSafe(item.id)}"><span class="finance-icon">${htmlSafe(item.icon||kind.icon)}</span><div class="finance-card-copy">${header}${info}<small class="${delta<0?'overdue-text':''}">${formatDate(due,{year:'numeric',month:'short',day:'numeric'})} · ${when}</small><small>每次 ${fmtMoney(Math.min(item.installmentCents,item.remainingCents))} · 预计还清 ${item.expectedPayoffDate?formatDate(item.expectedPayoffDate,{year:'numeric',month:'short',day:'numeric'}):'—'}</small></div><div class="finance-amount"><small>剩余债务</small><strong>${fmtMoney(item.remainingCents)}</strong><button class="small-button repay-inline" data-action="repay-debt" data-id="${htmlSafe(item.id)}">已还款</button></div></article>`;
+}
+function renderAccounts() {
+  const totals=totalAssetAmounts(), username=account?.username||'本机账本',avatar=account?.avatar||'preset:person',debts=activeDebts();
+  const assets=state.assets.map(item=>accountFinanceCard(item,assetKind(item))).join('');
+  const debtCards=debts.map(item=>{const kind=debtKinds.find(k=>k.id===item.kind)||{name:item.category||'其他债务',icon:item.icon||'📦',tone:'slate'};return accountFinanceCard(item,kind,true);}).join('');
+  return `<div class="page-heading account-page-heading"><div><h1>账户</h1><p>集中查看资金账户、资产与待还债务。</p></div></div>
+    <section class="surface account-hero"><div class="account-hero-user">${accountAvatarMarkup(avatar,'account-avatar account-hero-avatar')}<div><strong>${htmlSafe(username)}</strong><small>${account?'个人账户 · 数据已同步':'本机账本 · 登录后可在不同浏览器同步'}</small></div></div><div class="account-totals"><div><span>总资产</span><strong>${fmtMoney(totals.gross)}</strong></div><div><span>总负债</span><strong>${fmtMoney(totals.liabilities)}</strong></div><div><span>净资产</span><strong>${fmtMoney(totals.net)}</strong></div></div></section>
+    <div class="account-columns"><section class="surface finance-section"><div class="card-heading"><div><h2>资产账户</h2><div class="subheading">信用卡欠款计入负债，不计入总资产</div></div><button class="primary-btn" data-action="add-asset">＋ 添加资产</button></div><div class="finance-grid">${assets||'<div class="empty-state finance-empty">还没有资产账户，添加零钱、银行卡或其他资产开始管理。</div>'}</div></section>
+      <section class="surface finance-section"><div class="card-heading"><div><h2>债务</h2><div class="subheading">剩余待还 ${fmtMoney(totals.liabilities)} · ${debts.length} 笔</div></div><div class="finance-section-actions"><button class="small-button" data-action="debt-history">还款记录</button><button class="primary-btn" data-action="add-debt">＋ 添加债务</button></div></div><div class="finance-grid debt-grid">${debtCards||'<div class="empty-state finance-empty">暂无待还债务。添加后会显示下次还款日和预计还清日期。</div>'}</div></section></div>`;
+}
 function render() {
   $$('.nav-item').forEach(btn=>btn.classList.toggle('active',btn.dataset.page===page));
   updateAccountButton();
-  main.innerHTML=page==='calendar'?renderCalendar():renderStats();
+  main.innerHTML=page==='calendar'?renderCalendar():page==='stats'?renderStats():renderAccounts();
 }
 
 function showModal(title,eyebrow,html,kind) {
@@ -366,6 +454,46 @@ function showModal(title,eyebrow,html,kind) {
   setTimeout(()=>$('input:not([type=hidden]),select,button',modalBody)?.focus(),20);
 }
 function closeModal() { modalBackdrop.hidden=true; activeModal=null; categoryReturnDraft=null; modalBody.innerHTML=''; }
+function openAssetModal(asset=null) {
+  const kind=asset?.kind||'cash',meta=assetKind(asset||{kind}),custom=kind==='custom';
+  const options=assetKinds.map(k=>`<option value="${k.id}" ${kind===k.id?'selected':''}>${k.icon} ${htmlSafe(k.name)}</option>`).join('');
+  const balanceField=asset?`<div class="field"><label>${kind==='credit'?'当前欠款':'当前余额'}（人民币）</label><div class="asset-balance-readonly"><span>${fmtMoney(asset.balanceCents)}</span><button type="button" class="small-button" data-action="edit-asset-balance" data-id="${htmlSafe(asset.id)}">编辑余额</button></div><small class="avatar-hint">余额只读显示；可通过调整或账户间转账更新。</small></div>`:`<div class="field"><label for="assetBalance">初始余额（人民币）</label><div class="amount-input-wrap"><span class="amount-prefix">¥</span><input id="assetBalance" name="balance" inputmode="decimal" value="0.00" required></div><small class="avatar-hint">初始余额只更新账户，不会生成收入或支出记录。</small></div>`;
+  showModal(asset?'编辑资产账户':'添加资产','资产账户',`<form id="assetForm" class="form-stack" data-id="${htmlSafe(asset?.id||'')}"><div class="field"><label for="assetKind">资产类别</label><select id="assetKind" name="kind">${options}</select></div><div class="field" id="assetCustomField" ${custom?'':'hidden'}><label for="assetCustomCategory">自定义类别名称</label><input id="assetCustomCategory" name="category" maxlength="32" value="${htmlSafe(asset?.category||'')}" placeholder="例如：收藏品"></div><div class="field"><label for="assetName">账户名称</label><input id="assetName" name="name" maxlength="48" value="${htmlSafe(asset?.name||meta.name)}" placeholder="例如：日常零钱" required></div><div class="field"><label for="assetDetail">补充信息（选填）</label><input id="assetDetail" name="detail" maxlength="80" value="${htmlSafe(asset?.detail||'')}" placeholder="例如：招商银行 · 尾号 1234"></div>${balanceField}<div class="form-error" id="formError"></div><div class="form-footer">${asset?`<button type="button" class="danger-btn" data-action="delete-asset" data-id="${htmlSafe(asset.id)}">删除账户</button>`:'<span></span>'}<div class="form-footer-right"><button type="button" class="secondary-btn close-modal">取消</button><button type="submit" class="primary-btn">保存账户</button></div></div></form>`,'asset');
+}
+function openAssetBalanceModal(assetId) {
+  const asset=state.assets.find(a=>a.id===assetId);if(!asset)return;
+  const others=state.assets.filter(a=>a.id!==assetId),options=others.map(a=>`<option value="${htmlSafe(a.id)}">${htmlSafe(a.name||assetKind(a).name)} · ${htmlSafe(assetKind(a).name)} · ${fmtMoney(a.balanceCents)}</option>`).join('');
+  showModal('编辑余额','账户余额',`<form id="balanceForm" class="form-stack" data-id="${htmlSafe(asset.id)}"><div class="balance-mode-options"><button type="button" class="balance-mode active" data-balance-mode="manual"><strong>手动调整</strong><small>直接设定当前账户余额</small></button><button type="button" class="balance-mode" data-balance-mode="out"><strong>向其他账户转出</strong><small>从当前账户扣除并转入</small></button><button type="button" class="balance-mode" data-balance-mode="in"><strong>从其他账户转入</strong><small>从其他账户扣除并转入当前账户</small></button></div><input type="hidden" name="mode" value="manual"><div id="balanceManualPanel"><div class="field"><label for="balanceManual">调整后的余额（人民币）</label><div class="amount-input-wrap"><span class="amount-prefix">¥</span><input id="balanceManual" name="newBalance" inputmode="decimal" value="${(asset.balanceCents/100).toFixed(2)}" required></div><small class="avatar-hint">手动调整只更新账户余额，不产生收入或支出记录。</small></div></div><div id="balanceOutPanel" hidden><div class="field"><label for="balanceOutAccount">转入账户</label><select id="balanceOutAccount" name="otherAccountOut"><option value="">请选择其他账户</option>${options}</select></div><div class="field"><label for="balanceOutAmount">转出金额</label><div class="amount-input-wrap"><span class="amount-prefix">¥</span><input id="balanceOutAmount" name="outAmount" inputmode="decimal" placeholder="0.00"></div></div></div><div id="balanceInPanel" hidden><div class="field"><label for="balanceInAccount">转出账户</label><select id="balanceInAccount" name="otherAccountIn"><option value="">请选择其他账户</option>${others.filter(a=>a.kind!=='credit').map(a=>`<option value="${htmlSafe(a.id)}">${htmlSafe(a.name||assetKind(a).name)} · ${htmlSafe(assetKind(a).name)} · ${fmtMoney(a.balanceCents)}</option>`).join('')}</select></div><div class="field"><label for="balanceInAmount">转入金额</label><div class="amount-input-wrap"><span class="amount-prefix">¥</span><input id="balanceInAmount" name="inAmount" inputmode="decimal" placeholder="0.00"></div></div></div><div class="form-error" id="formError"></div><div class="form-footer"><span></span><div class="form-footer-right"><button type="button" class="secondary-btn" data-action="back-to-asset" data-id="${htmlSafe(asset.id)}">返回账户</button><button type="submit" class="primary-btn">确认更新</button></div></div></form>`,'balance');
+}
+function setAssetBalanceMode(mode) {
+  const form=$('#balanceForm',modalBody);if(!form)return;
+  const value=$('input[name="mode"]',modalBody);if(value)value.value=mode;
+  $('#balanceManualPanel',modalBody).hidden=mode!=='manual';$('#balanceOutPanel',modalBody).hidden=mode!=='out';$('#balanceInPanel',modalBody).hidden=mode!=='in';
+  $$('[data-balance-mode]',modalBody).forEach(button=>button.classList.toggle('active',button.dataset.balanceMode===mode));
+}
+function openDebtModal(debt=null) {
+  const kind=debt?.kind||'personal',periodic=!!(debt?debt.periodic:true),custom=kind==='custom';
+  const options=debtKinds.map(k=>`<option value="${k.id}" ${kind===k.id?'selected':''}>${k.icon} ${htmlSafe(k.name)}</option>`).join('');
+  showModal(debt?'编辑债务':'添加债务','债务计划',`<form id="debtForm" class="form-stack" data-id="${htmlSafe(debt?.id||'')}"><div class="field"><label for="debtKind">债务类别</label><select id="debtKind" name="kind">${options}</select></div><div class="field" id="debtCustomField" ${custom?'':'hidden'}><label for="debtCustomCategory">自定义类别名称</label><input id="debtCustomCategory" name="category" maxlength="32" value="${htmlSafe(debt?.category||'')}" placeholder="例如：装修借款"></div><div class="field"><label for="debtName">债务名称</label><input id="debtName" name="name" maxlength="48" value="${htmlSafe(debt?.name||debtKinds.find(k=>k.id===kind)?.name||'')}" required></div><div class="field"><label for="debtDetail">补充信息（选填）</label><input id="debtDetail" name="detail" maxlength="80" value="${htmlSafe(debt?.detail||'')}" placeholder="例如：贷款机构、借款人"></div><div class="field"><label for="debtTotal">债务总额</label><div class="amount-input-wrap"><span class="amount-prefix">¥</span><input id="debtTotal" name="total" inputmode="decimal" value="${debt?(debt.totalCents/100).toFixed(2):''}" required></div></div><div class="field"><label for="debtPeriodic">是否周期性还款</label><select id="debtPeriodic" name="periodic"><option value="yes" ${periodic?'selected':''}>是</option><option value="no" ${periodic?'':'selected'}>否</option></select></div><div id="periodicDebtFields" class="form-row" ${periodic?'':'hidden'}><div class="field"><label for="debtFirstDate">第一次还款日期</label><input id="debtFirstDate" name="firstDueDate" type="date" value="${htmlSafe(debt?.firstDueDate||TODAY)}"></div><div class="field"><label for="debtFrequency">还款频率</label><div class="frequency-fields"><input id="debtFrequency" name="frequency" type="number" min="1" max="3650" step="1" value="${htmlSafe(debt?.frequency||1)}"><select id="debtUnit" name="unit"><option value="day" ${debt?.unit==='day'?'selected':''}>日</option><option value="week" ${debt?.unit==='week'?'selected':''}>周</option><option value="month" ${!debt||debt.unit==='month'?'selected':''}>月</option></select></div></div></div><div id="singleDebtFields" class="form-row" ${periodic?'hidden':''}><div class="field"><label for="debtDueDate">预计还款日期</label><input id="debtDueDate" name="dueDate" type="date" value="${htmlSafe(debt?.firstDueDate||TODAY)}"></div></div><div class="field"><label for="debtInstallment">每次还款金额</label><div class="amount-input-wrap"><span class="amount-prefix">¥</span><input id="debtInstallment" name="installment" inputmode="decimal" value="${debt?(debt.installmentCents/100).toFixed(2):''}" required></div><small class="avatar-hint">单次还款金额不得高于债务总额。</small></div><div class="debt-payoff-preview" id="debtPayoffPreview">填写金额和还款日期后显示预计还清日期。</div><div class="form-error" id="formError"></div><div class="form-footer">${debt?`<button type="button" class="danger-btn" data-action="delete-debt" data-id="${htmlSafe(debt.id)}">删除债务</button>`:'<span></span>'}<div class="form-footer-right"><button type="button" class="secondary-btn close-modal">取消</button><button type="submit" class="primary-btn">保存债务</button></div></div></form>`,'debt');
+  updateDebtPayoffPreview();
+}
+function updateDebtPayoffPreview() {
+  const preview=$('#debtPayoffPreview',modalBody),form=$('#debtForm',modalBody);if(!preview||!form)return;
+  const data=new FormData(form),totalCents=parseMoney(data.get('total')),installmentCents=parseMoney(data.get('installment')),periodic=data.get('periodic')==='yes',due=periodic?data.get('firstDueDate'):data.get('dueDate');
+  if(totalCents===null||installmentCents===null||!dateIsValid(due)){preview.textContent='填写有效金额和还款日期后显示预计还清日期。';return;}
+  const estimated=Core.debtScheduleState({id:'preview',totalCents,firstDueDate:due,periodic,frequency:Number(data.get('frequency'))||1,unit:data.get('unit')||'month',installmentCents},[]).payoffDate;
+  preview.textContent=`预计还清日期：${formatDate(estimated,{year:'numeric',month:'long',day:'numeric'})}${periodic?'（按设定的还款频率计算）':''}`;
+}
+function openRepaymentModal(debtId) {
+  const debt=state.debts.find(d=>d.id===debtId);if(!debt||debt.remainingCents<=0)return;
+  const amount=Math.min(debt.installmentCents,debt.remainingCents),accounts=state.assets.filter(a=>a.kind!=='credit');
+  showModal('确认已还款','债务还款',`<form id="repaymentForm" class="form-stack" data-id="${htmlSafe(debt.id)}"><p class="modal-note">请确认已支付本次还款。提交后会生成一笔支出并更新债务余额；如误操作，可在还款记录中撤回。</p><div class="repayment-confirm-card"><strong>${htmlSafe(debt.name)}</strong><span>本次还款 ${fmtMoney(amount)}</span><small>剩余债务 ${fmtMoney(debt.remainingCents)} → ${fmtMoney(debt.remainingCents-amount)}</small></div><div class="field"><label for="repaymentAccount">从哪个账户支付（可选）</label><select name="accountId" id="repaymentAccount"><option value="">不关联账户余额</option>${accounts.map(a=>`<option value="${htmlSafe(a.id)}">${htmlSafe(a.name||assetKind(a).name)} · ${fmtMoney(a.balanceCents)}</option>`).join('')}</select></div><div class="form-error" id="formError"></div><div class="form-footer"><span></span><div class="form-footer-right"><button type="button" class="secondary-btn close-modal">再检查一下</button><button class="primary-btn" type="submit">确认已还款</button></div></div></form>`,'repayment');
+}
+function openDebtHistoryModal() {
+  const rows=[...(state.debtPayments||[])].sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  const content=rows.length?`<div class="payment-history-list">${rows.map(p=>{const debt=state.debts.find(d=>d.id===p.debtId),reversed=!!p.reversedAt;return `<div class="payment-history-row ${reversed?'reversed':''}"><div><strong>${htmlSafe(debt?.name||'已归档债务')}</strong><small>${htmlSafe(p.date)} · ${reversed?'已撤回':'已还款'}</small></div><b>${fmtMoney(p.amountCents)}</b>${reversed?'<span class="muted-line">已撤回</span>':`<button class="small-button" data-action="undo-repayment" data-id="${htmlSafe(p.id)}">撤回</button>`}</div>`;}).join('')}</div>`:'<div class="empty-state">还没有还款记录。</div>';
+  showModal('还款记录','债务历史',`${content}<div class="form-footer"><span class="modal-note">撤回会同步恢复债务余额、提醒和关联账户金额。</span><div class="form-footer-right"><button type="button" class="secondary-btn close-modal">关闭</button></div></div>`,'debt-history');
+}
 function openBudgetModal(isDay) {
   if(isDay) {
     const context=dailyBudgetContext(selectedDate),has=context.hasOverride,value=has?state.dayBudgets[selectedDate]:context.budgetCents;
@@ -395,11 +523,13 @@ function openTransactionModal(type='expense',record=null,draft=null) {
   const recordContent=draft?.content??record?.content??'';
   const recordAmount=draft?.amount??(record?(record.amountCents/100).toFixed(2):'');
   const recordNote=draft?.note??record?.note??'';
+  const recordAccountId=draft?.accountId??record?.accountId??'';
   const form=`<form id="transactionForm" class="form-stack" data-record-id="${htmlSafe(recordId)}">
     <div class="form-row"><div class="field"><label for="transactionType">收支类型</label><select name="type" id="transactionType"><option value="expense" ${fixedType==='expense'?'selected':''}>支出</option><option value="income" ${fixedType==='income'?'selected':''}>收入</option></select></div><div class="field"><label for="transactionDate">日期</label><input type="date" id="transactionDate" name="date" value="${htmlSafe(recordDate)}" required></div></div>
     <div id="categoryPicker">${renderCategoryPicker(fixedType)}</div>
     <div class="field"><label for="transactionContent">具体内容</label><input id="transactionContent" name="content" maxlength="80" placeholder="例如：午餐、超市采购" value="${htmlSafe(recordContent)}" required></div>
     <div class="field"><label for="transactionAmount">金额</label><div class="amount-input-wrap"><span class="amount-prefix">¥</span><input id="transactionAmount" name="amount" inputmode="decimal" placeholder="0.00" value="${htmlSafe(recordAmount)}" required></div></div>
+    <div class="field"><label for="transactionAccount">关联账户（可选）</label><select id="transactionAccount" name="accountId"><option value="">不关联账户</option>${state.assets.map(a=>`<option value="${htmlSafe(a.id)}" ${a.id===recordAccountId?'selected':''}>${htmlSafe(a.name||assetKind(a).name)} · ${htmlSafe(assetKind(a).name)}</option>`).join('')}</select><small class="avatar-hint">关联后会同步增减账户余额；未关联的记录不影响资产余额。</small></div>
     <div class="field"><label for="transactionNote">备注（可选）</label><textarea id="transactionNote" name="note" rows="2" maxlength="160" placeholder="补充一点说明">${htmlSafe(recordNote)}</textarea></div>
     <div class="form-error" id="formError"></div>
     <div class="form-footer">${record?`<button type="button" class="danger-btn" data-action="delete-record" data-id="${htmlSafe(record.id)}">删除记录</button>`:'<span class="modal-note">保存后会同步更新日历、预算和统计。</span>'}<div class="form-footer-right"><button type="button" class="secondary-btn close-modal">取消</button><button type="submit" class="primary-btn">${record?'保存修改':'保存记录'}</button></div></div>
@@ -421,16 +551,40 @@ function openAccountModal(mode='login') {
 }
 function openAvatarEditor() {
   avatarEditorValue=normalizeAvatar(account?.avatar);
-  showModal('编辑头像','个人账户',`<form id="avatarForm" class="form-stack"><div id="avatarPreview" class="avatar-editor-preview">${accountAvatarMarkup(avatarEditorValue,'large avatar-editor-large')}</div><div class="field"><label>默认头像</label><div class="avatar-choice-grid">${avatarChoicesMarkup(avatarEditorValue)}</div></div><div class="field"><label for="avatarFile">从本地上传图片</label><input class="avatar-file-input" id="avatarFile" type="file" accept="image/png,image/jpeg,image/webp"><small class="avatar-hint">支持 PNG、JPG、WebP，文件不超过 1 MB。</small></div><div class="form-error" id="avatarError"></div><div class="form-footer"><span class="modal-note">头像会保存到账户并同步到其他浏览器。</span><div class="form-footer-right"><button type="button" class="secondary-btn" data-action="cancel-avatar-edit">返回账户</button><button type="submit" class="primary-btn">保存头像</button></div></div></form>`,'avatar-editor');
+  avatarCropImage=null;avatarCropZoom=1;avatarCropX=0;avatarCropY=0;
+  showModal('编辑头像','个人账户',`<form id="avatarForm" class="form-stack"><div id="avatarPreview" class="avatar-editor-preview">${accountAvatarMarkup(avatarEditorValue,'large avatar-editor-large')}</div><div class="field"><label>默认头像</label><div class="avatar-choice-grid">${avatarChoicesMarkup(avatarEditorValue)}</div></div><div class="field"><label for="avatarFile">从本地上传图片</label><input class="avatar-file-input" id="avatarFile" type="file" accept="image/png,image/jpeg,image/webp"><small class="avatar-hint">支持 PNG、JPG、WebP，原图最大 20 MB；可拖动并缩放选择方形展示区域。</small></div><div id="avatarCropTools" class="avatar-crop-tools" hidden><canvas id="avatarCropCanvas" width="280" height="280" aria-label="拖动图片选择头像裁剪范围"></canvas><label for="avatarZoom">缩放图片</label><input id="avatarZoom" type="range" min="1" max="4" step="0.05" value="1"></div><div class="form-error" id="avatarError"></div><div class="form-footer"><span class="modal-note">头像会保存到账户并同步到其他浏览器。</span><div class="form-footer-right"><button type="button" class="secondary-btn" data-action="cancel-avatar-edit">返回账户</button><button type="submit" class="primary-btn">保存头像</button></div></div></form>`,'avatar-editor');
 }
 function refreshAvatarPreview() {
   const preview=$('#avatarPreview',modalBody);
   if(preview)preview.innerHTML=accountAvatarMarkup(avatarEditorValue,'large avatar-editor-large');
   $$('[data-avatar-preset]',modalBody).forEach(button=>button.classList.toggle('active',avatarEditorValue===`preset:${button.dataset.avatarPreset}`));
 }
+function drawAvatarCrop() {
+  const canvas=$('#avatarCropCanvas',modalBody);if(!canvas||!avatarCropImage)return;
+  const ctx=canvas.getContext('2d');if(!ctx)return;
+  const width=avatarCropImage.naturalWidth,height=avatarCropImage.naturalHeight,base=Math.min(width,height),side=base/avatarCropZoom;
+  avatarCropX=Math.max(0,Math.min(width-side,avatarCropX));avatarCropY=Math.max(0,Math.min(height-side,avatarCropY));
+  ctx.clearRect(0,0,canvas.width,canvas.height);ctx.drawImage(avatarCropImage,avatarCropX,avatarCropY,side,side,0,0,canvas.width,canvas.height);
+}
+function selectAvatarImage(file,error) {
+  if(!file)return;
+  if(!['image/png','image/jpeg','image/webp'].includes(file.type)){error.textContent='请选择 PNG、JPG 或 WebP 图片。';return;}
+  if(file.size>20*1024*1024){error.textContent='原图不能超过 20 MB。';return;}
+  const url=URL.createObjectURL(file),image=new Image();
+  image.onload=()=>{
+    URL.revokeObjectURL(url);avatarCropImage=image;avatarCropZoom=1;avatarCropX=(image.naturalWidth-Math.min(image.naturalWidth,image.naturalHeight))/2;avatarCropY=(image.naturalHeight-Math.min(image.naturalWidth,image.naturalHeight))/2;
+    $('#avatarCropTools',modalBody).hidden=false;$('#avatarZoom',modalBody).value='1';error.textContent='拖动图片调整位置，或使用滑块缩放。';drawAvatarCrop();
+  };
+  image.onerror=()=>{URL.revokeObjectURL(url);error.textContent='无法读取这张图片，请换一张图片重试。';};image.src=url;
+}
 async function submitAvatarForm(error) {
   if(error?.textContent)return;
   try {
+    if(avatarCropImage){
+      const sourceSide=Math.min(avatarCropImage.naturalWidth,avatarCropImage.naturalHeight)/avatarCropZoom,sx=avatarCropX,sy=avatarCropY;
+      const canvas=document.createElement('canvas');canvas.width=512;canvas.height=512;const ctx=canvas.getContext('2d');ctx.drawImage(avatarCropImage,sx,sy,sourceSide,sourceSide,0,0,512,512);
+      let image=canvas.toDataURL('image/jpeg',0.88);if(image.length>7_500_000)image=canvas.toDataURL('image/jpeg',0.68);avatarEditorValue=image;
+    }
     const result=await apiRequest('/api/profile',{method:'POST',body:JSON.stringify({avatar:normalizeAvatar(avatarEditorValue)})});
     account=result.user;closeModal();render();toast('头像已保存并同步到账户');openAccountModal();
   } catch(e) { error.textContent=e.message||'头像保存失败，请重试。'; }
@@ -476,8 +630,16 @@ main.addEventListener('click',async e=>{
     case 'add-expense':openTransactionModal('expense');break;
     case 'add-income':openTransactionModal('income');break;
     case 'edit-record':{const r=state.transactions.find(x=>x.id===action.dataset.id);if(r)openTransactionModal(r.type,r);break;}
-    case 'delete-record':{const id=action.dataset.id;if(window.confirm('确定删除这条记录吗？删除后会立即从统计和预算中扣除。')){state.transactions=state.transactions.filter(r=>r.id!==id);closeModal();await commit('记录已删除');}break;}
+    case 'delete-record':{const id=action.dataset.id;if(window.confirm('确定删除这条记录吗？删除后会立即从统计、预算和关联账户中扣除。')){removeTransaction(id);closeModal();await commit('记录已删除');}break;}
     case 'clear-day-budget':delete state.dayBudgets[selectedDate];closeModal();await commit('已恢复动态日预算');break;
+    case 'add-asset':openAssetModal();break;
+    case 'edit-asset':{const item=state.assets.find(a=>a.id===action.dataset.id);if(item)openAssetModal(item);break;}
+    case 'add-debt':openDebtModal();break;
+    case 'edit-debt':{const item=state.debts.find(d=>d.id===action.dataset.id);if(item)openDebtModal(item);break;}
+    case 'repay-debt':openRepaymentModal(action.dataset.id);break;
+    case 'debt-history':openDebtHistoryModal();break;
+    case 'undo-repayment':await undoRepayment(action.dataset.id);break;
+    case 'open-accounts':page='accounts';render();break;
   }
 });
 main.addEventListener('change',e=>{
@@ -497,15 +659,18 @@ $('.close-modal').addEventListener('click',closeModal);
 modalBackdrop.addEventListener('click',e=>{if(e.target===modalBackdrop||e.target.closest('.close-modal'))closeModal();});
 modalBody.addEventListener('click',async e=>{
   const action=e.target.closest('[data-action]');
+  if(action?.dataset.action==='edit-asset-balance'){openAssetBalanceModal(action.dataset.id);return;}
+  if(action?.dataset.action==='back-to-asset'){const asset=state.assets.find(a=>a.id===action.dataset.id);if(asset)openAssetModal(asset);return;}
+  const balanceMode=e.target.closest('[data-balance-mode]');if(balanceMode){setAssetBalanceMode(balanceMode.dataset.balanceMode);return;}
   if(action?.dataset.action==='edit-avatar'){openAvatarEditor();return;}
   if(action?.dataset.action==='cancel-avatar-edit'){openAccountModal();return;}
   const avatarChoice=e.target.closest('[data-avatar-preset]');
-  if(avatarChoice){avatarEditorValue=`preset:${avatarChoice.dataset.avatarPreset}`;const file=$('#avatarFile',modalBody);if(file)file.value='';const error=$('#avatarError',modalBody);if(error)error.textContent='';refreshAvatarPreview();return;}
+  if(avatarChoice){avatarEditorValue=`preset:${avatarChoice.dataset.avatarPreset}`;avatarCropImage=null;const file=$('#avatarFile',modalBody);if(file)file.value='';const tools=$('#avatarCropTools',modalBody);if(tools)tools.hidden=true;const error=$('#avatarError',modalBody);if(error)error.textContent='';refreshAvatarPreview();return;}
   if(action?.dataset.action==='new-category-from-transaction'){
     const form=$('#transactionForm',modalBody);
     if(form){
       const data=new FormData(form);
-      openCategoryModal({type:data.get('type'),date:data.get('date'),content:data.get('content')||'',amount:data.get('amount')||'',note:data.get('note')||'',recordId:form.dataset.recordId||'',categoryId:selectedCategoryId});
+      openCategoryModal({type:data.get('type'),date:data.get('date'),content:data.get('content')||'',amount:data.get('amount')||'',note:data.get('note')||'',accountId:data.get('accountId')||'',recordId:form.dataset.recordId||'',categoryId:selectedCategoryId});
     }
     return;
   }
@@ -522,10 +687,19 @@ modalBody.addEventListener('click',async e=>{
   if(action?.dataset.action==='delete-record'){
     const id=action.dataset.id;
     if(window.confirm('确定删除这条记录吗？删除后会立即从统计和预算中扣除。')){
-      state.transactions=state.transactions.filter(r=>r.id!==id);closeModal();commit('记录已删除');
+      removeTransaction(id);closeModal();commit('记录已删除');
     }
     return;
   }
+  if(action?.dataset.action==='delete-asset'){
+    const id=action.dataset.id;if(state.transactions.some(tx=>tx.accountId===id)||state.debtPayments.some(payment=>payment.accountId===id&&!payment.reversedAt)){toast('该账户关联了收支或还款记录，不能删除；可编辑余额或名称。',true);return;}
+    if(window.confirm('确定删除这个资产账户吗？')){state.assets=state.assets.filter(a=>a.id!==id);closeModal();await commit('资产账户已删除');}return;
+  }
+  if(action?.dataset.action==='delete-debt'){
+    const id=action.dataset.id;if(state.debtPayments.some(payment=>payment.debtId===id)){toast('该债务已有还款历史，暂不能删除；可在还款记录中撤回。',true);return;}
+    if(window.confirm('确定删除这笔债务吗？')){state.debts=state.debts.filter(d=>d.id!==id);closeModal();await commit('债务已删除');}return;
+  }
+  if(action?.dataset.action==='undo-repayment'){await undoRepayment(action.dataset.id);return;}
   const authMode=e.target.closest('[data-auth-mode]');
   if(authMode){openAccountModal(authMode.dataset.authMode);return;}
   const group=e.target.closest('[data-category-group]');
@@ -537,21 +711,26 @@ modalBody.addEventListener('click',async e=>{
 });
 modalBody.addEventListener('change',async e=>{
   if(e.target.id==='avatarFile'){
-    const file=e.target.files?.[0],error=$('#avatarError',modalBody);
-    if(!file)return;
-    if(!['image/png','image/jpeg','image/webp'].includes(file.type)){error.textContent='请选择 PNG、JPG 或 WebP 图片。';e.target.value='';return;}
-    if(file.size>1_000_000){error.textContent='图片文件不能超过 1 MB。';e.target.value='';return;}
-    try{
-      const image=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('无法读取图片。'));reader.readAsDataURL(file);});
-      if(!isAvatarImage(image)){error.textContent='图片格式无效，请重新选择。';return;}
-      avatarEditorValue=image;error.textContent='';refreshAvatarPreview();
-    }catch(err){error.textContent=err.message||'无法读取图片。';}
+    selectAvatarImage(e.target.files?.[0],$('#avatarError',modalBody));
     return;
   }
+  if(e.target.id==='assetKind')$('#assetCustomField',modalBody).hidden=e.target.value!=='custom';
+  if(e.target.id==='debtKind')$('#debtCustomField',modalBody).hidden=e.target.value!=='custom';
+  if(e.target.id==='debtPeriodic'){
+    const periodic=e.target.value==='yes';$('#periodicDebtFields',modalBody).hidden=!periodic;$('#singleDebtFields',modalBody).hidden=periodic;updateDebtPayoffPreview();
+  }
+  if(['debtFirstDate','debtDueDate','debtFrequency','debtUnit','debtInstallment','debtTotal'].includes(e.target.id))updateDebtPayoffPreview();
   if(e.target.id==='transactionType'){const type=e.target.value;const groups=categoryGroups(type);selectedCategoryGroup=groups[0]||'';selectedCategoryId=state.categories.find(c=>c.type===type&&c.group===selectedCategoryGroup)?.id||'';$('#categoryPicker').innerHTML=renderCategoryPicker(type);}
   if(e.target.id==='newCategoryType'){const groups=categoryGroups(e.target.value);const sel=$('#newCategoryGroup');sel.innerHTML=groups.map(g=>`<option value="${htmlSafe(g)}">${htmlSafe(g)}</option>`).join('')+'<option value="__new__">＋ 新建分类组</option>';$('#newGroupField').hidden=true;}
   if(e.target.id==='newCategoryGroup')$('#newGroupField').hidden=e.target.value!=='__new__';
 });
+modalBody.addEventListener('input',e=>{
+  if(e.target.id==='avatarZoom'&&avatarCropImage){const canvas=$('#avatarCropCanvas',modalBody),oldSide=Math.min(avatarCropImage.naturalWidth,avatarCropImage.naturalHeight)/avatarCropZoom,cx=avatarCropX+oldSide/2,cy=avatarCropY+oldSide/2;avatarCropZoom=Number(e.target.value)||1;const nextSide=Math.min(avatarCropImage.naturalWidth,avatarCropImage.naturalHeight)/avatarCropZoom;avatarCropX=cx-nextSide/2;avatarCropY=cy-nextSide/2;drawAvatarCrop();}
+  if(e.target.closest('#debtForm'))updateDebtPayoffPreview();
+});
+modalBody.addEventListener('pointerdown',e=>{if(e.target.id==='avatarCropCanvas'&&avatarCropImage){avatarCropDrag={x:e.clientX,y:e.clientY};e.target.setPointerCapture?.(e.pointerId);}});
+modalBody.addEventListener('pointermove',e=>{if(!avatarCropDrag||!avatarCropImage||e.target.id!=='avatarCropCanvas')return;const canvas=e.target,side=Math.min(avatarCropImage.naturalWidth,avatarCropImage.naturalHeight)/avatarCropZoom,scale=side/canvas.width;avatarCropX-=(e.clientX-avatarCropDrag.x)*scale;avatarCropY-=(e.clientY-avatarCropDrag.y)*scale;avatarCropDrag={x:e.clientX,y:e.clientY};drawAvatarCrop();});
+modalBody.addEventListener('pointerup',()=>{avatarCropDrag=null;});
 modalBody.addEventListener('submit',async e=>{
   e.preventDefault();const form=e.target,error=$('#formError',modalBody);if(error)error.textContent='';
   if(form.id==='avatarForm'){const avatarError=$('#avatarError',modalBody);await submitAvatarForm(avatarError);return;}
@@ -562,10 +741,59 @@ modalBody.addEventListener('submit',async e=>{
     if(!dateIsValid(date)){error.textContent='请选择有效日期。';return;}
     if(!content){error.textContent='请填写具体内容。';return;}
     if(amountCents===null){error.textContent='金额须大于 0，最多填写两位小数。';return;}
-    const id=form.dataset.recordId||`txn_${crypto.randomUUID()}`, existing=state.transactions.find(r=>r.id===id), now=Date.now();
-    const record={id,type,date,amountCents,categoryId:selectedCategoryId,content,note:String(data.get('note')||'').trim(),createdAt:existing?.createdAt||now,updatedAt:now};
-    if(existing)state.transactions=state.transactions.map(r=>r.id===id?record:r);else state.transactions.push(record);
+    const id=form.dataset.recordId||`txn_${crypto.randomUUID()}`, existing=state.transactions.find(r=>r.id===id), now=Date.now(),accountId=String(data.get('accountId')||'');
+    if(accountId&&!state.assets.some(a=>a.id===accountId)){error.textContent='所选账户已不存在，请重新选择。';return;}
+    const record={id,type,date,amountCents,categoryId:selectedCategoryId,content,note:String(data.get('note')||'').trim(),...(accountId?{accountId}:{}),createdAt:existing?.createdAt||now,updatedAt:now};
+    upsertTransaction(record,existing);
     closeModal();await commit(existing?'记录已更新，预算和统计已同步':'记录已保存');return;
+  }
+  if(form.id==='assetForm'){
+    const data=new FormData(form),kind=String(data.get('kind')||'other'),meta=assetKinds.find(k=>k.id===kind)||assetKinds.find(k=>k.id==='other'),category=kind==='custom'?String(data.get('category')||'').trim():meta.name,name=String(data.get('name')||'').trim(),detail=String(data.get('detail')||'').trim(),id=form.dataset.id||`asset_${crypto.randomUUID()}`,existing=state.assets.find(a=>a.id===id),balanceCents=existing?existing.balanceCents:parseMoney(data.get('balance'),true);
+    if(kind==='custom'&&!category){error.textContent='请填写自定义资产类别名称。';return;}
+    if(!name){error.textContent='请填写账户名称。';return;}
+    if(balanceCents===null){error.textContent='余额须为非负金额，最多填写两位小数。';return;}
+    const now=Date.now(),asset={id,kind,category,name,detail,icon:meta.icon,tone:meta.tone,balanceCents,createdAt:existing?.createdAt||now,updatedAt:now};
+    if(existing)state.assets=state.assets.map(a=>a.id===id?asset:a);else state.assets.push(asset);
+    closeModal();await commit(existing?'资产账户已更新':'资产账户已添加');return;
+  }
+  if(form.id==='balanceForm'){
+    const mode=String(new FormData(form).get('mode')||'manual'),asset=state.assets.find(a=>a.id===form.dataset.id);if(!asset){if(error)error.textContent='账户已不存在，请刷新后重试。';return;}
+    if(mode==='manual'){
+      const amount=parseMoney(new FormData(form).get('newBalance'),true);if(amount===null){if(error)error.textContent='请输入有效余额，最多填写两位小数。';else toast('请输入有效余额，最多填写两位小数。',true);return;}
+      asset.balanceCents=amount;asset.updatedAt=Date.now();closeModal();await commit('账户余额已调整；没有生成收支记录');return;
+    }
+    const values=new FormData(form),incoming=mode==='in',otherId=String(values.get(incoming?'otherAccountIn':'otherAccountOut')||''),amount=parseMoney(values.get(incoming?'inAmount':'outAmount'));
+    const other=state.assets.find(a=>a.id===otherId),source=incoming?other:asset,destination=incoming?asset:other;
+    if(!other||other.id===asset.id){if(error)error.textContent='请选择另一个有效账户。';else toast('请选择另一个有效账户。',true);return;}
+    if(amount===null){if(error)error.textContent='请输入大于 0 的转账金额，最多填写两位小数。';else toast('请输入大于 0 的转账金额，最多填写两位小数。',true);return;}
+    if(source.kind==='credit'){const message='信用卡欠款不能作为转出余额，请选择现金或储蓄账户作为转出账户。';if(error)error.textContent=message;else toast(message,true);return;}
+    const available=Math.max(0,source.balanceCents||0);if(amount>available){const message=`转出金额超过账户余额，当前可用余额为 ${fmtMoney(available)}。`;if(error)error.textContent=message;else toast(message,true);return;}
+    source.balanceCents-=amount;destination.balanceCents+=destination.kind==='credit'?-amount:amount;source.updatedAt=destination.updatedAt=Date.now();
+    closeModal();await commit(incoming?'转入已完成；没有生成收入或支出记录':'转出已完成；没有生成收入或支出记录');return;
+  }
+  if(form.id==='debtForm'){
+    const data=new FormData(form),kind=String(data.get('kind')||'other'),meta=debtKinds.find(k=>k.id===kind)||debtKinds.find(k=>k.id==='other'),category=kind==='custom'?String(data.get('category')||'').trim():meta.name,name=String(data.get('name')||'').trim(),detail=String(data.get('detail')||'').trim(),totalCents=parseMoney(data.get('total')),installmentCents=parseMoney(data.get('installment')),periodic=data.get('periodic')==='yes',firstDueDate=String(periodic?data.get('firstDueDate'):data.get('dueDate')||''),frequency=Number(data.get('frequency')),unit=String(data.get('unit')||'month'),id=form.dataset.id||`debt_${crypto.randomUUID()}`,existing=state.debts.find(d=>d.id===id);
+    if(kind==='custom'&&!category){error.textContent='请填写自定义债务类别名称。';return;}
+    if(!name){error.textContent='请填写债务名称。';return;}
+    if(totalCents===null||installmentCents===null){error.textContent='债务总额和还款金额须大于 0，最多填写两位小数。';return;}
+    if(!periodic&&installmentCents>totalCents){error.textContent='单次还款金额不能高于债务总额。';return;}
+    if(!dateIsValid(firstDueDate)){error.textContent='请选择有效的还款日期。';return;}
+    if(periodic&&(!Number.isInteger(frequency)||frequency<1||frequency>3650||!['day','week','month'].includes(unit))){error.textContent='请填写有效的周期频率和单位。';return;}
+    const paid=(state.debtPayments||[]).filter(p=>p.debtId===id&&!p.reversedAt).reduce((sum,p)=>sum+p.amountCents,0);
+    if(existing&&totalCents<paid){error.textContent='债务总额不能低于已经还款的金额。';return;}
+    const now=Date.now(),debt={id,kind,category,name,detail,icon:meta.icon,tone:meta.tone,totalCents,remainingCents:Math.max(0,totalCents-paid),periodic,firstDueDate,frequency:periodic?frequency:1,unit:periodic?unit:'day',installmentCents,createdAt:existing?.createdAt||now,updatedAt:now};
+    recalculateDebt(debt);if(existing)state.debts=state.debts.map(d=>d.id===id?debt:d);else state.debts.push(debt);
+    closeModal();await commit(existing?'债务计划已更新':'债务已添加');return;
+  }
+  if(form.id==='repaymentForm'){
+    const data=new FormData(form),debt=state.debts.find(d=>d.id===form.dataset.id);if(!debt||debt.remainingCents<=0){error.textContent='这笔债务已还清或不存在。';return;}
+    const accountId=String(data.get('accountId')||''),asset=accountId?state.assets.find(a=>a.id===accountId):null;
+    if(accountId&&(!asset||asset.kind==='credit')){error.textContent='请选择有效的现金或储蓄账户。';return;}
+    const now=Date.now(),amountCents=Math.min(debt.installmentCents,debt.remainingCents),paymentId=`pay_${crypto.randomUUID()}`,transactionId=`txn_${crypto.randomUUID()}`,categoryId='seed_e_debt';
+    const payment={id:paymentId,debtId:debt.id,transactionId,date:TODAY,amountCents,...(accountId?{accountId}:{}),createdAt:now,updatedAt:now};
+    const record={id:transactionId,type:'expense',date:TODAY,amountCents,categoryId,content:`偿还债务 · ${debt.name}`,note:'债务还款',debtPaymentId:paymentId,...(accountId?{accountId}:{}),createdAt:now,updatedAt:now};
+    state.debtPayments.push(payment);state.transactions.push(record);assetBalanceImpact(record,1);recalculateDebt(debt);
+    closeModal();await commit(debt.remainingCents===0?'债务已全部还清':'还款已记录，统计和提醒已更新');return;
   }
   if(form.id==='budgetForm'){
     const amount=parseMoney(new FormData(form).get('amount'),true);if(amount===null){error.textContent='请输入有效金额，最多填写两位小数。';return;}

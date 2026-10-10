@@ -1,4 +1,5 @@
 import http.cookiejar
+import base64
 import json
 import socket
 import subprocess
@@ -69,7 +70,7 @@ def run():
         assert status == 201 and registered["user"]["username"] == "小明.账本"
         assert registered["user"]["avatar"] == ""
         data_a = request(browser_a, base_url + "/api/data")[1]
-        assert data_a["data"] == initial and data_a["revision"] == 1
+        assert data_a["data"] == {**initial, "assets": [], "debts": [], "debtPayments": []} and data_a["revision"] == 1
 
         status, profile = request(browser_a, base_url + "/api/profile", "POST", {"avatar": "preset:sun"})
         assert status == 200 and profile["user"]["avatar"] == "preset:sun"
@@ -86,6 +87,10 @@ def run():
         except HTTPError as error:
             assert error.code == 400
         assert request(browser_b, base_url + "/api/session")[1]["user"]["avatar"] == uploaded_avatar
+        large_image = b"\x89PNG\r\n\x1a\n" + b"x" * 1_100_000
+        large_avatar = "data:image/png;base64," + base64.b64encode(large_image).decode("ascii")
+        status, profile = request(browser_a, base_url + "/api/profile", "POST", {"avatar": large_avatar})
+        assert status == 200 and profile["user"]["avatar"] == large_avatar, "uploads larger than 1 MB should be accepted"
         data_b = request(browser_b, base_url + "/api/data")[1]
         assert data_b["data"]["transactions"][0]["amountCents"] == 1234
         changed = {**initial, "transactions": [{**initial["transactions"][0], "amountCents": 2500}]}
@@ -96,6 +101,22 @@ def run():
         except HTTPError as error:
             assert error.code == 409
         assert request(browser_b, base_url + "/api/data")[1]["data"]["transactions"][0]["amountCents"] == 2500
+
+        category = {"id": "seed_e_debt", "type": "expense", "group": "财务", "name": "债务还款", "icon": "💳", "builtin": True}
+        financial_state = {
+            **changed,
+            "categories": [*initial["categories"], category],
+            "assets": [{"id": "asset_bank", "kind": "bank", "category": "储蓄卡", "name": "工资卡", "detail": "尾号 1234", "icon": "🏦", "tone": "blue", "balanceCents": 97500, "createdAt": 1, "updatedAt": 2}],
+            "debts": [{"id": "debt_home", "kind": "mortgage", "category": "房贷", "name": "住房贷款", "detail": "测试银行", "icon": "🏠", "tone": "blue", "totalCents": 10000, "remainingCents": 7500, "periodic": True, "firstDueDate": "2026-10-09", "nextDueDate": "2026-11-09", "frequency": 1, "unit": "month", "installmentCents": 2500, "expectedPayoffDate": "2027-01-09", "createdAt": 1, "updatedAt": 2}],
+            "transactions": [*changed["transactions"], {"id": "tx_repayment", "type": "expense", "date": "2026-10-09", "amountCents": 2500, "categoryId": "seed_e_debt", "content": "偿还债务 · 住房贷款", "note": "债务还款", "accountId": "asset_bank", "debtPaymentId": "pay_home_1", "createdAt": 2, "updatedAt": 2}],
+            "debtPayments": [{"id": "pay_home_1", "debtId": "debt_home", "transactionId": "tx_repayment", "date": "2026-10-09", "amountCents": 2500, "accountId": "asset_bank", "createdAt": 2, "updatedAt": 2, "reversedAt": None}],
+        }
+        current = request(browser_a, base_url + "/api/data")[1]
+        request(browser_a, base_url + "/api/data", "PUT", {"data": financial_state, "expectedRevision": current["revision"]})
+        persisted_finance = request(browser_b, base_url + "/api/data")[1]["data"]
+        assert persisted_finance["assets"][0]["balanceCents"] == 97500
+        assert persisted_finance["debts"][0]["nextDueDate"] == "2026-11-09"
+        assert persisted_finance["debtPayments"][0]["amountCents"] == 2500
 
         try:
             request(build_opener(), base_url + "/api/data")
@@ -112,7 +133,7 @@ def run():
         server = start_server(port, db_path)
         wait_until_ready(base_url, server)
         session = request(browser_b, base_url + "/api/session")[1]
-        assert session["authenticated"] is True and session["user"]["avatar"] == uploaded_avatar
+        assert session["authenticated"] is True and session["user"]["avatar"] == large_avatar
         assert request(browser_b, base_url + "/api/data")[1]["data"]["transactions"][0]["amountCents"] == 2500
 
         try:

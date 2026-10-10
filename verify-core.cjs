@@ -50,6 +50,21 @@ assert.equal(core.budgetMeter(8500, 10000).label, '已使用 85%');
 assert.equal(core.budgetMeter(0, 0).label, '暂无当日预算');
 assert.ok(Number.isFinite(core.budgetMeter(0, 0).pct));
 
+assert.equal(core.advancePaymentDate('2026-01-31', 1, 'month'), '2026-02-28');
+assert.equal(core.advancePaymentDate('2026-02-28', 1, 'month', 31), '2026-03-31', 'monthly due dates retain the original day after a short month');
+assert.equal(core.advancePaymentDate('2026-01-31', 2, 'month'), '2026-03-31');
+assert.equal(core.advancePaymentDate('2026-10-09', 2, 'week'), '2026-10-23');
+const debtPlan = { id: 'home', totalCents: 10000, firstDueDate: '2026-01-31', periodic: true, frequency: 1, unit: 'month', installmentCents: 2500 };
+const debtSchedule = core.debtScheduleState(debtPlan, [
+  { id: 'p1', debtId: 'home', amountCents: 2500 },
+  { id: 'p2', debtId: 'home', amountCents: 2500 },
+  { id: 'p3', debtId: 'home', amountCents: 2500, reversedAt: 1 },
+]);
+assert.equal(debtSchedule.remainingCents, 5000);
+assert.equal(debtSchedule.nextDueDate, '2026-03-31');
+assert.equal(debtSchedule.payoffDate, '2026-04-30');
+assert.equal(core.daysBetween('2026-10-09', '2026-10-12'), 3);
+
 const categories = [{ id: 'food', type: 'expense', group: '生活', name: '餐饮', icon: '🍜' }];
 const editedRecords = [{ date: '2026-10-01', type: 'expense', categoryId: 'food', amountCents: 500 }];
 assert.equal(core.groupRecords(editedRecords, 'expense', categories)[0].amountCents, 500);

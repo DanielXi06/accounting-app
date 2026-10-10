@@ -13,13 +13,13 @@
     const [whole,decimal='']=s.split('.'),cents=Number(whole)*100+Number(decimal.padEnd(2,'0'));
     if(!Number.isSafeInteger(cents)||(allowZero?cents<0:cents<=0))return null;return cents;
   }
-  function sumRecords(records,type) { return records.reduce((sum,r)=>sum+(r.type===type?r.amountCents:0),0); }
+  function sumRecords(records,type) { return records.reduce((sum,r)=>sum+(r.type===type&&!r.voidedAt?r.amountCents:0),0); }
   function groupRecords(records,type,categories) {
     const byId=new Map(categories.map(c=>[c.id,c])),groups=new Map();
-    records.filter(r=>r.type===type).forEach(r=>{const category=byId.get(r.categoryId)||{id:'missing',type,group:'其他',name:'已移除分类',icon:'❔'};const row=groups.get(category.id)||{category,amountCents:0};row.amountCents+=r.amountCents;groups.set(category.id,row);});
+    records.filter(r=>r.type===type&&!r.voidedAt).forEach(r=>{const category=byId.get(r.categoryId)||{id:'missing',type,group:'其他',name:'已移除分类',icon:'❔'};const row=groups.get(category.id)||{category,amountCents:0};row.amountCents+=r.amountCents;groups.set(category.id,row);});
     return [...groups.values()].sort((a,b)=>b.amountCents-a.amountCents);
   }
-  function recordsInRange(records,start,end) { return start>end?[]:records.filter(r=>r.date>=start&&r.date<=end); }
+  function recordsInRange(records,start,end) { return start>end?[]:records.filter(r=>!r.voidedAt&&r.date>=start&&r.date<=end); }
   function daysRemainingInMonth(key) {
     const [year,month,day]=key.split('-').map(Number);
     return Math.max(0,daysInMonth(year,month)-day+1);
@@ -48,6 +48,32 @@
     const pct=spentCents/budgetCents*100,over=spentCents>budgetCents;
     return {budgeted:true,pct,over,width:Math.min(100,pct),label:over?`超出 ${Math.round(pct-100)}%`:`已使用 ${Math.round(pct)}%`};
   }
+  function advancePaymentDate(key,frequency,unit,anchorDay) {
+    const n=Math.max(1,Math.floor(Number(frequency)||1));
+    if(unit==='day')return shiftDate(key,n);
+    if(unit==='week')return shiftDate(key,n*7);
+    if(unit==='month'){
+      const d=dateFromKey(key),day=anchorDay||d.getDate();d.setDate(1);d.setMonth(d.getMonth()+n);
+      d.setDate(Math.min(day,daysInMonth(d.getFullYear(),d.getMonth()+1)));return localDateKey(d);
+    }
+    return key;
+  }
+  function debtScheduleState(debt,payments=[]) {
+    const active=payments.filter(p=>p.debtId===debt.id&&!p.reversedAt);
+    const paidCents=active.reduce((sum,p)=>sum+(Number(p.amountCents)||0),0);
+    const remainingCents=Math.max(0,(Number(debt.totalCents)||0)-paidCents);
+    const anchorDay=dateFromKey(debt.firstDueDate).getDate();
+    const nextDueDate=debt.periodic
+      ?Array.from({length:active.length}).reduce(date=>advancePaymentDate(date,debt.frequency,debt.unit,anchorDay),debt.firstDueDate)
+      :debt.firstDueDate;
+    const installment=Math.max(1,Number(debt.installmentCents)||remainingCents||1);
+    const paymentCount=Math.max(1,Math.ceil(remainingCents/installment));
+    const payoffDate=remainingCents<=0?null:(debt.periodic
+      ?Array.from({length:paymentCount-1}).reduce(date=>advancePaymentDate(date,debt.frequency,debt.unit,anchorDay),nextDueDate)
+      :nextDueDate);
+    return {remainingCents,nextDueDate,payoffDate,paidCount:active.length,activePayments:active};
+  }
+  function daysBetween(start,end) { return Math.round((dateFromKey(end)-dateFromKey(start))/DAY_MS); }
   function periodForYear(year,today) {
     const y=Number(year),start=`${y}-01-01`,fullEnd=`${y}-12-31`,isCurrent=y===Number(today.slice(0,4));
     return {start,end:isCurrent?today:fullEnd,fullEnd,isCurrent,label:`${y} 年`};
@@ -73,5 +99,5 @@
     }
     return Array.from({length:n},(_,i)=>{const key=shiftDate(anchor,i-(n-1));return {start:key,end:key,label:rangeDate(key,false),title:rangeDate(key)};});
   }
-  root.LedgerCore=Object.freeze({DAY_MS,localDateKey,dateFromKey,shiftDate,shiftMonth,daysInMonth,daysRemainingInMonth,monthKey,mondayOf,parseMoney,sumRecords,groupRecords,recordsInRange,dailyBudget,dailyBudgetForDate,budgetMeter,periodForYear,periodForMonth,periodForWeek,trendPeriods});
+  root.LedgerCore=Object.freeze({DAY_MS,localDateKey,dateFromKey,shiftDate,shiftMonth,daysInMonth,daysRemainingInMonth,monthKey,mondayOf,parseMoney,sumRecords,groupRecords,recordsInRange,dailyBudget,dailyBudgetForDate,budgetMeter,advancePaymentDate,debtScheduleState,daysBetween,periodForYear,periodForMonth,periodForWeek,trendPeriods});
 })(globalThis);

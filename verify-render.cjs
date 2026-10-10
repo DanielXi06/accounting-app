@@ -1,8 +1,8 @@
-const assert = require('node:assert/strict');
+﻿const assert = require('node:assert/strict');
 require('./core.js');
 
 class MockElement {
-  constructor() { this.innerHTML = ''; this.handlers = {}; this.dataset = {}; this.classList = { toggle() {} }; this.hidden = false; }
+  constructor() { this.innerHTML = ''; this.textContent = ''; this.value = ''; this.values = {}; this.handlers = {}; this.dataset = {}; this.classList = { toggle() {} }; this.hidden = false; }
   addEventListener(name, fn) { (this.handlers[name] ||= []).push(fn); }
   focus() {}
   select() {}
@@ -13,7 +13,7 @@ class MockElement {
 }
 const elements = new Map();
 const getElement = key => { if (!elements.has(key)) elements.set(key, new MockElement()); return elements.get(key); };
-const nav = ['calendar', 'stats'].map(page => { const el = new MockElement(); el.dataset.page = page; return el; });
+const nav = ['calendar', 'stats', 'accounts'].map(page => { const el = new MockElement(); el.dataset.page = page; return el; });
 global.document = {
   querySelector: key => getElement(key),
   querySelectorAll: key => key === '.nav-item' ? nav : [],
@@ -25,9 +25,9 @@ delete cachedCoreVersion.dailyBudgetForDate;
 global.window = { LedgerCore: cachedCoreVersion, confirm: () => true };
 let storedState = null;
 let transactionDraftElement = null;
-getElement('#modalBody').querySelector = selector => selector === '#transactionForm' ? transactionDraftElement : null;
+getElement('#modalBody').querySelector = selector => selector === '#transactionForm' && transactionDraftElement ? transactionDraftElement : getElement(selector);
 global.localStorage = { getItem: () => storedState, setItem: (_key, value) => { storedState = value; }, removeItem: () => { storedState = null; } };
-global.FormData = class { constructor(form) { this.values = form.values; } get(key) { return this.values[key] ?? null; } };
+global.FormData = class { constructor(form) { this.values = form.values || {}; } get(key) { return this.values[key] ?? null; } };
 console.warn = () => {};
 let remoteData = null, remoteAccount = null, remoteRevision = 0;
 global.fetch = async (path, options = {}) => {
@@ -187,5 +187,66 @@ const targetFor = selectors => ({ closest: selector => selectors[selector] || nu
   assert.equal(remoteData.transactions.length, 2);
   assert.ok(remoteData.transactions.some(record => record.content === '另一浏览器新增'));
   assert.ok(remoteData.transactions.some(record => record.content === '当前浏览器新增'));
-  console.log('界面与交互验证通过：导航切换、趋势回看自定义、动态日预算、旧版脚本缓存兼容、分类和记录增删改、统计更新、账户同步及头像编辑。');
+  await bottomNav.handlers.click[0]({ target: targetFor({ '.nav-item': nav[2] }) });
+  assert.match(main.innerHTML, /总资产/);
+  assert.match(main.innerHTML, /资产账户/);
+  assert.match(main.innerHTML, /债务/);
+  await clickMainAction('add-asset');
+  const assetForm = { id: 'assetForm', dataset: { id: '' }, values: { kind: 'bank', category: '', name: '验证储蓄卡', detail: '尾号 1234', balance: '1000.00' } };
+  await modal.handlers.submit.at(-1)({ preventDefault() {}, target: assetForm });
+  const asset = remoteData.assets.find(item => item.name === '验证储蓄卡');
+  assert.equal(asset.balanceCents, 100000);
+  await clickMainAction('add-asset');
+  const secondAssetForm = { id: 'assetForm', dataset: { id: '' }, values: { kind: 'cash', category: '', name: '验证零钱', detail: '', balance: '500.00' } };
+  await modal.handlers.submit.at(-1)({ preventDefault() {}, target: secondAssetForm });
+  const otherAsset = remoteData.assets.find(item => item.name === '验证零钱');
+  await clickMainAction('edit-asset', { id: asset.id });
+  assert.match(modal.innerHTML, /asset-balance-readonly/);
+  assert.doesNotMatch(modal.innerHTML, /id="assetBalance" name="balance"/);
+  await modal.handlers.click.at(-1)({ target: targetFor({ '[data-action]': { dataset: { action: 'edit-asset-balance', id: asset.id } } }) });
+  assert.match(modal.innerHTML, /手动调整/);
+  assert.match(modal.innerHTML, /向其他账户转出/);
+  assert.match(modal.innerHTML, /从其他账户转入/);
+  await modal.handlers.click.at(-1)({ target: targetFor({ '[data-balance-mode]': { dataset: { balanceMode: 'out' } } }) });
+  const transferForm = { id: 'balanceForm', dataset: { id: asset.id }, values: { mode: 'out', otherAccountOut: otherAsset.id, outAmount: '1000.01' } };
+  await modal.handlers.submit.at(-1)({ preventDefault() {}, target: transferForm });
+  assert.match(getElement('#formError').textContent, /超过账户余额/);
+  assert.equal(remoteData.assets.find(item => item.id === asset.id).balanceCents, 100000, 'an over-balance transfer is rejected');
+  transferForm.values.outAmount = '100.00';
+  await modal.handlers.submit.at(-1)({ preventDefault() {}, target: transferForm });
+  assert.equal(remoteData.assets.find(item => item.id === asset.id).balanceCents, 90000);
+  assert.equal(remoteData.assets.find(item => item.id === otherAsset.id).balanceCents, 60000);
+  await clickMainAction('edit-asset', { id: asset.id });
+  await modal.handlers.click.at(-1)({ target: targetFor({ '[data-action]': { dataset: { action: 'edit-asset-balance', id: asset.id } } }) });
+  const manualBalanceForm = { id: 'balanceForm', dataset: { id: asset.id }, values: { mode: 'manual', newBalance: '950.00' } };
+  await modal.handlers.submit.at(-1)({ preventDefault() {}, target: manualBalanceForm });
+  assert.equal(remoteData.assets.find(item => item.id === asset.id).balanceCents, 95000, 'manual adjustment changes only the displayed balance');
+  await bottomNav.handlers.click[0]({ target: targetFor({ '.nav-item': nav[0] }) });
+  await clickMainAction('add-expense');
+  const linkedForm = { id: 'transactionForm', dataset: { recordId: '' }, values: { type: 'expense', date: todayText, content: '账户关联消费', amount: '1.00', note: '', accountId: asset.id } };
+  await modal.handlers.submit.at(-1)({ preventDefault() {}, target: linkedForm });
+  assert.equal(remoteData.assets.find(item => item.id === asset.id).balanceCents, 94900, 'linked spending reduces the asset balance');
+  await bottomNav.handlers.click[0]({ target: targetFor({ '.nav-item': nav[2] }) });
+  await clickMainAction('add-debt');
+  const debtForm = { id: 'debtForm', dataset: { id: '' }, values: { kind: 'mortgage', category: '', name: '验证房贷', detail: '', total: '100.00', periodic: 'yes', firstDueDate: todayText, dueDate: todayText, frequency: '1', unit: 'month', installment: '25.00' } };
+  await modal.handlers.submit.at(-1)({ preventDefault() {}, target: debtForm });
+  const debt = remoteData.debts.find(item => item.name === '验证房贷');
+  assert.equal(debt.expectedPayoffDate, global.LedgerCore.shiftMonth(todayText, 3));
+  await clickMainAction('repay-debt', { id: debt.id });
+  const repaymentForm = { id: 'repaymentForm', dataset: { id: debt.id }, values: { accountId: asset.id } };
+  await modal.handlers.submit.at(-1)({ preventDefault() {}, target: repaymentForm });
+  assert.equal(remoteData.debts.find(item => item.id === debt.id).remainingCents, 7500);
+  assert.equal(remoteData.assets.find(item => item.id === asset.id).balanceCents, 92400, 'repayment expense also debits its linked cash account');
+  assert.ok(remoteData.transactions.some(item => item.debtPaymentId && item.amountCents === 2500));
+  await bottomNav.handlers.click[0]({ target: targetFor({ '.nav-item': nav[1] }) });
+  assert.match(main.innerHTML, /债务还款/);
+  assert.match(main.innerHTML, /¥25\.00/);
+  await bottomNav.handlers.click[0]({ target: targetFor({ '.nav-item': nav[2] }) });
+  await clickMainAction('debt-history');
+  await modal.handlers.click.at(-1)({ target: targetFor({ '[data-action]': { dataset: { action: 'undo-repayment', id: remoteData.debtPayments[0].id } } }) });
+  assert.equal(remoteData.debts.find(item => item.id === debt.id).remainingCents, 10000, 'undo restores the remaining debt');
+  assert.ok(remoteData.debtPayments[0].reversedAt, 'undo is retained in repayment history');
+  assert.equal(remoteData.assets.find(item => item.id === asset.id).balanceCents, 94900, 'undo restores the linked asset balance');
+  assert.ok(remoteData.transactions.some(item => item.debtPaymentId && item.voidedAt), 'undone repayment is excluded from the ledger by a void marker');
+  console.log('界面与交互验证通过：导航与预算、收支增删改、账户同步、头像编辑、余额手动调整、账户转账与余额不足拦截、资产关联扣款、债务周期、还款统计和撤回恢复。');
 })().catch(error => { console.error(error); process.exitCode = 1; });
