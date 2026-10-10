@@ -196,6 +196,9 @@ const targetFor = selectors => ({ closest: selector => selectors[selector] || nu
   assert.match(main.innerHTML, /资产账户/);
   assert.match(main.innerHTML, /债务/);
   await clickMainAction('add-asset');
+  assert.match(modal.innerHTML, /id="assetName"[^>]*placeholder="例如：招商银行 · 尾号 1234"/);
+  assert.match(modal.innerHTML, /id="assetDetail"[^>]*value=""/);
+  assert.doesNotMatch(modal.innerHTML, /id="assetDetail"[^>]*placeholder=/);
   const assetForm = { id: 'assetForm', dataset: { id: '' }, values: { kind: 'bank', category: '', name: '验证储蓄卡', detail: '尾号 1234', balance: '1000.00' } };
   await modal.handlers.submit.at(-1)({ preventDefault() {}, target: assetForm });
   const asset = remoteData.assets.find(item => item.name === '验证储蓄卡');
@@ -204,6 +207,12 @@ const targetFor = selectors => ({ closest: selector => selectors[selector] || nu
   const secondAssetForm = { id: 'assetForm', dataset: { id: '' }, values: { kind: 'cash', category: '', name: '验证零钱', detail: '', balance: '500.00' } };
   await modal.handlers.submit.at(-1)({ preventDefault() {}, target: secondAssetForm });
   const otherAsset = remoteData.assets.find(item => item.name === '验证零钱');
+  await clickMainAction('add-asset');
+  const customAssetForm = { id: 'assetForm', dataset: { id: '' }, values: { kind: 'custom', category: '校园卡', name: '校内消费卡', detail: '', balance: '33.86' } };
+  await modal.handlers.submit.at(-1)({ preventDefault() {}, target: customAssetForm });
+  const customAsset = remoteData.assets.find(item => item.name === '校内消费卡');
+  assert.equal(customAsset.category, '校园卡');
+  assert.match(main.innerHTML, /<span class="finance-type">校园卡<\/span><strong>校内消费卡<\/strong>/);
   await clickMainAction('edit-asset', { id: asset.id });
   assert.match(modal.innerHTML, /asset-balance-readonly/);
   assert.doesNotMatch(modal.innerHTML, /id="assetBalance" name="balance"/);
