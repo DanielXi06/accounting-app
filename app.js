@@ -206,7 +206,7 @@ function avatarChoicesMarkup(value) {
 function currentDateLabel(key) { return formatDate(key,{year:'numeric',month:'long',day:'numeric',weekday:'long'}); }
 function getCategory(id) { return state.categories.find(c=>c.id===id)||{id:'missing',type:'expense',group:'其他',name:'已移除分类',icon:'❔'}; }
 function assetKind(item) { return assetKinds.find(k=>k.id===item?.kind)||{id:item?.kind||'custom',name:item?.category||'其他资产',icon:item?.icon||'📦',tone:'slate'}; }
-function activeDebts() { return state.debts.filter(d=>(Number(d.remainingCents)||0)>0).sort((a,b)=>(a.nextDueDate||a.firstDueDate).localeCompare(b.nextDueDate||b.firstDueDate)); }
+function activeDebts() { return state.debts.filter(d=>!d.archived&&(Number(d.remainingCents)||0)>0).sort((a,b)=>(a.nextDueDate||a.firstDueDate).localeCompare(b.nextDueDate||b.firstDueDate)); }
 function recalculateDebt(debt) {
   const schedule=Core.debtScheduleState(debt,state.debtPayments||[]);
   debt.remainingCents=schedule.remainingCents;debt.nextDueDate=schedule.nextDueDate;debt.expectedPayoffDate=schedule.payoffDate;debt.updatedAt=Date.now();return schedule;
@@ -232,7 +232,7 @@ async function undoRepayment(paymentId) {
   const payment=state.debtPayments.find(p=>p.id===paymentId);if(!payment||payment.reversedAt)return;
   payment.reversedAt=Date.now();payment.updatedAt=payment.reversedAt;
   voidTransaction(payment.transactionId);
-  const debt=state.debts.find(d=>d.id===payment.debtId);if(debt)recalculateDebt(debt);
+  const debt=state.debts.find(d=>d.id===payment.debtId);if(debt){debt.archived=false;recalculateDebt(debt);}
   closeModal();await commit('已撤回还款；债务提醒和账户余额已恢复');
 }
 function totalAssetAmounts() {
@@ -352,7 +352,7 @@ function recordCard() {
 function debtRemindersCard() {
   const debts=activeDebts();
   const content=debts.length?`<div class="debt-reminder-list">${debts.map(debt=>{const due=debt.nextDueDate,delta=Core.daysBetween(TODAY,due),when=delta<0?`已逾期 ${Math.abs(delta)} 天`:delta===0?'今天到期':`还剩 ${delta} 天`;return `<div class="debt-reminder ${delta<0?'overdue':''}"><span class="debt-kind-icon">${htmlSafe(debt.icon||'💳')}</span><span class="debt-reminder-text"><strong>${htmlSafe(debt.name)} · ${when}</strong><small>${formatDate(due,{year:'numeric',month:'short',day:'numeric'})} · 剩余 ${fmtMoney(debt.remainingCents)}</small></span><button class="small-button" data-action="repay-debt" data-id="${htmlSafe(debt.id)}">已还款</button></div>`;}).join('')}</div>`:`<div class="empty-state">暂无待还债务。添加债务后会在这里提醒下一次还款日期。</div>`;
-  return `<section class="surface detail-card debt-reminders-card"><div class="card-heading"><div><h3>债务提醒</h3><div class="subheading">显示每笔债务的下一次还款</div></div><button class="small-button" data-action="open-accounts">查看账户</button></div>${content}</section>`;
+  return `<section class="surface detail-card debt-reminders-card"><div class="card-heading"><div><h3>债务提醒</h3><div class="subheading">显示每笔债务的下一次还款</div></div><div class="finance-section-actions"><button class="small-button" data-action="debt-history">查看还款记录</button><button class="small-button" data-action="open-accounts">查看账户</button></div></div>${content}</section>`;
 }
 function expensePieCard() {
   const rows=groupRecords(recordsOn(selectedDate),'expense'), total=rows.reduce((s,r)=>s+r.amountCents,0);
@@ -361,7 +361,7 @@ function expensePieCard() {
 function renderCalendar() {
   return `<div class="page-heading"><div><h1>日历</h1><p>按天查看收支，让每一笔都有迹可循。</p></div></div>
     <div class="calendar-layout"><section class="surface calendar-surface calendar-main"><div class="calendar-controls"><div class="date-controls"><div class="arrows"><button class="arrow-btn" data-action="calendar-prev" aria-label="上一个">‹</button><button class="arrow-btn" data-action="calendar-next" aria-label="下一个">›</button></div><h2>${calendarHeaderTitle()}</h2><input aria-label="选择日期" class="period-select" style="height:33px;min-width:136px;padding:0 8px" type="date" id="calendarDate" value="${selectedDate}"></div><div class="view-switch" aria-label="日历视图"><button class="${calendarView==='month'?'active':''}" data-view="month">月视图</button><button class="${calendarView==='week'?'active':''}" data-view="week">周视图</button><button class="${calendarView==='day'?'active':''}" data-view="day">日视图</button></div></div>${calendarCanvas()}</section>
-      <aside class="detail-panel">${monthBudgetCard()}${dailySummaryCard()}${recordCard()}${expensePieCard()}${debtRemindersCard()}</aside></div>`;
+      <aside class="detail-panel">${monthBudgetCard()}${dailySummaryCard()}${debtRemindersCard()}${recordCard()}${expensePieCard()}</aside></div>`;
 }
 
 function getSelectedStatsPeriod() {
@@ -508,6 +508,11 @@ function openDebtModal(debt=null) {
     <div class="form-footer">${debt?`<button type="button" class="danger-btn" data-action="delete-debt" data-id="${htmlSafe(debt.id)}">删除债务</button>`:'<span></span>'}<div class="form-footer-right"><button type="button" class="secondary-btn close-modal">取消</button><button type="submit" class="primary-btn">保存债务</button></div></div>
   </form>`,'debt');
   updateDebtPayoffPreview();
+}
+function openDebtDeleteConfirmation(debt) {
+  const history=(state.debtPayments||[]).filter(payment=>payment.debtId===debt.id),activeCount=history.filter(payment=>!payment.reversedAt).length,reversedCount=history.length-activeCount;
+  const remaining=debt.remainingCents>0?`尚余 ${fmtMoney(debt.remainingCents)}，移除后不再计入负债汇总。`:'这笔债务已还清。';
+  showModal('移除债务','已有还款历史',`<div class="form-stack"><div class="repayment-confirm-card"><strong>“${htmlSafe(debt.name)}”有 ${history.length} 条还款历史</strong><span>${activeCount} 笔有效 · ${reversedCount} 笔已撤回</span><small>确认后，这笔债务会从账户债务列表和日历提醒中移除。已生成的还款记录与支出统计会保留；${remaining}</small></div><div class="form-footer"><button type="button" class="secondary-btn" data-action="cancel-debt-delete" data-id="${htmlSafe(debt.id)}">返回编辑</button><div class="form-footer-right"><button type="button" class="danger-btn" data-action="confirm-debt-delete" data-id="${htmlSafe(debt.id)}">确认移除债务</button></div></div></div>`,'debt-delete-confirm');
 }
 function syncDebtPaymentFields(periodic) {
   const periodicFields=$('#periodicDebtFields',modalBody),singleFields=$('#singleDebtFields',modalBody);
@@ -737,8 +742,16 @@ modalBody.addEventListener('click',async e=>{
     if(window.confirm('确定删除这个资产账户吗？')){state.assets=state.assets.filter(a=>a.id!==id);closeModal();await commit('资产账户已删除');}return;
   }
   if(action?.dataset.action==='delete-debt'){
-    const id=action.dataset.id;if(state.debtPayments.some(payment=>payment.debtId===id)){toast('该债务已有还款历史，暂不能删除；可在还款记录中撤回。',true);return;}
-    if(window.confirm('确定删除这笔债务吗？')){state.debts=state.debts.filter(d=>d.id!==id);closeModal();await commit('债务已删除');}return;
+    const id=action.dataset.id,debt=state.debts.find(item=>item.id===id);if(!debt)return;
+    if((state.debtPayments||[]).some(payment=>payment.debtId===id)){openDebtDeleteConfirmation(debt);return;}
+    if(window.confirm('确定删除这笔债务吗？')){state.debts=state.debts.filter(item=>item.id!==id);closeModal();await commit('债务已删除');}return;
+  }
+  if(action?.dataset.action==='cancel-debt-delete'){
+    const debt=state.debts.find(item=>item.id===action.dataset.id);if(debt)openDebtModal(debt);return;
+  }
+  if(action?.dataset.action==='confirm-debt-delete'){
+    const debt=state.debts.find(item=>item.id===action.dataset.id);if(!debt)return;
+    debt.archived=true;debt.updatedAt=Date.now();closeModal();await commit('债务已移出列表；还款历史和支出统计已保留');return;
   }
   if(action?.dataset.action==='undo-repayment'){await undoRepayment(action.dataset.id);return;}
   const authMode=e.target.closest('[data-auth-mode]');

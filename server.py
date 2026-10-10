@@ -224,13 +224,14 @@ def validate_state(value) -> dict:
             "unit": _text(item, "unit", 8),
             "installmentCents": _safe_cents(item.get("installmentCents"), positive=True),
             "expectedPayoffDate": item.get("expectedPayoffDate"),
+            "archived": item.get("archived", False),
             "createdAt": item.get("createdAt", 0),
             "updatedAt": item.get("updatedAt", 0),
         }
         if debt["kind"] not in DEBT_KINDS or debt["id"] in debt_ids:
             raise ApiError(400, "债务类别无效或债务 ID 重复。")
-        if not isinstance(debt["periodic"], bool) or debt["remainingCents"] > debt["totalCents"]:
-            raise ApiError(400, "债务金额或还款周期设置无效。")
+        if not isinstance(debt["periodic"], bool) or not isinstance(debt["archived"], bool) or debt["remainingCents"] > debt["totalCents"]:
+            raise ApiError(400, "债务金额、归档或还款周期设置无效。")
         if not isinstance(debt["frequency"], int) or isinstance(debt["frequency"], bool) or not 1 <= debt["frequency"] <= 3650:
             raise ApiError(400, "还款周期频率无效。")
         if debt["unit"] not in {"day", "week", "month"} or (not debt["periodic"] and debt["installmentCents"] > debt["totalCents"]):
