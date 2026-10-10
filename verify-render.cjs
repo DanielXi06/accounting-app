@@ -212,6 +212,7 @@ const targetFor = selectors => ({ closest: selector => selectors[selector] || nu
   await modal.handlers.submit.at(-1)({ preventDefault() {}, target: customAssetForm });
   const customAsset = remoteData.assets.find(item => item.name === '校内消费卡');
   assert.equal(customAsset.category, '校园卡');
+  assert.match(main.innerHTML, /finance-card tone-pink/);
   assert.match(main.innerHTML, /<span class="finance-type">校园卡<\/span><strong>校内消费卡<\/strong>/);
   await clickMainAction('edit-asset', { id: asset.id });
   assert.match(modal.innerHTML, /asset-balance-readonly/);

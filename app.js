@@ -9,7 +9,7 @@ const palette = ['#647eea','#e57669','#4aad86','#e6ad56','#8b72d8','#45a9bb','#e
 const assetKinds=[
   {id:'cash',name:'零钱',icon:'💵',tone:'mint'},{id:'bank',name:'储蓄卡',icon:'🏦',tone:'blue'},{id:'credit',name:'信用卡',icon:'💳',tone:'rose'},
   {id:'wallet',name:'电子钱包',icon:'📱',tone:'violet'},{id:'investment',name:'储蓄/理财',icon:'💰',tone:'gold'},{id:'brokerage',name:'证券账户',icon:'📈',tone:'cyan'},
-  {id:'property',name:'房产',icon:'🏠',tone:'orange'},{id:'receivable',name:'应收款',icon:'🤝',tone:'green'},{id:'other',name:'其他资产',icon:'📦',tone:'slate'},{id:'custom',name:'自定义类别',icon:'✳️',tone:'slate'}
+  {id:'property',name:'房产',icon:'🏠',tone:'orange'},{id:'receivable',name:'应收款',icon:'🤝',tone:'green'},{id:'other',name:'其他资产',icon:'📦',tone:'slate'},{id:'custom',name:'自定义类别',icon:'✳️',tone:'pink'}
 ];
 const debtKinds=[
   {id:'personal',name:'个人借款',icon:'🤝',tone:'rose'},{id:'mortgage',name:'房贷',icon:'🏠',tone:'blue'},{id:'auto',name:'车贷',icon:'🚗',tone:'orange'},
@@ -445,7 +445,7 @@ function accountFinanceCard(item,kind,isDebt=false) {
 function renderAccounts() {
   const totals=totalAssetAmounts(), username=account?.username||'本机账本',avatar=account?.avatar||'preset:person',debts=activeDebts();
   const assets=state.assets.map(item=>accountFinanceCard(item,assetKind(item))).join('');
-  const debtCards=debts.map(item=>{const kind=debtKinds.find(k=>k.id===item.kind)||{name:item.category||'其他债务',icon:item.icon||'📦',tone:'slate'};return accountFinanceCard(item,kind,true);}).join('');
+  const debtCards=debts.map(item=>{const kind=debtKinds.find(k=>k.id===item.kind)||{name:item.category||'其他债务',icon:item.icon||'📦',tone:item.kind==='custom'?'pink':'slate'};return accountFinanceCard(item,kind,true);}).join('');
   return `<div class="page-heading account-page-heading"><div><h1>账户</h1><p>集中查看资金账户、资产与待还债务。</p></div></div>
     <section class="surface account-hero"><div class="account-hero-user">${accountAvatarMarkup(avatar,'account-avatar account-hero-avatar')}<div><strong>${htmlSafe(username)}</strong><small>${account?'个人账户 · 数据已同步':'本机账本 · 登录后可在不同浏览器同步'}</small></div></div><div class="account-totals"><div><span>总资产</span><strong>${fmtMoney(totals.gross)}</strong></div><div><span>总负债</span><strong>${fmtMoney(totals.liabilities)}</strong></div><div><span>净资产</span><strong>${fmtMoney(totals.net)}</strong></div></div></section>
     <div class="account-columns"><section class="surface finance-section"><div class="card-heading"><div><h2>资产账户</h2><div class="subheading">信用卡欠款计入负债，不计入总资产</div></div><button class="primary-btn" data-action="add-asset">＋ 添加资产</button></div><div class="finance-grid">${assets||'<div class="empty-state finance-empty">还没有资产账户，添加零钱、银行卡或其他资产开始管理。</div>'}</div></section>
