@@ -65,15 +65,6 @@ function openDatabase() {
   });
   return dbPromise;
 }
-async function readPersistedState() {
-  try { const db=await openDatabase(); const data=await new Promise((resolve,reject)=>{ const req=db.transaction('app','readonly').objectStore('app').get('state'); req.onsuccess=()=>resolve(req.result?.value||null); req.onerror=()=>reject(req.error); }); if(data) return data; }
-  catch(e) { console.warn('IndexedDB unavailable; using localStorage fallback.',e); }
-  try { const raw=localStorage.getItem('qingzhang-state-v1'); return raw?JSON.parse(raw):null; } catch { return null; }
-}
-async function persistLocalState(data) {
-  try { const db=await openDatabase(); await new Promise((resolve,reject)=>{ const tx=db.transaction('app','readwrite'); tx.objectStore('app').put({id:'state',value:data}); tx.oncomplete=resolve; tx.onerror=()=>reject(tx.error); tx.onabort=()=>reject(tx.error||new Error('Save aborted')); }); return 'indexeddb'; }
-  catch(e) { console.warn('IndexedDB save failed; trying localStorage.',e); try { localStorage.setItem('qingzhang-state-v1',JSON.stringify(data)); return 'localstorage'; } catch { throw new Error('本机保存失败。请检查浏览器存储空间或隐私设置后重试。'); } }
-}
 async function clearLocalState() {
   try { const db=await openDatabase(); await new Promise((resolve,reject)=>{ const tx=db.transaction('app','readwrite'); tx.objectStore('app').delete('state'); tx.oncomplete=resolve; tx.onerror=()=>reject(tx.error); tx.onabort=()=>reject(tx.error||new Error('清理本机缓存失败')); }); }
   catch(e) { console.warn('Could not clear local account cache.',e); }
@@ -92,6 +83,7 @@ let state=emptyState();
 let account=null;
 let accountBase=null;
 let page='calendar', calendarView='month', selectedDate=TODAY;
+let pendingProtectedPage=null, pendingProtectedAction=null;
 let statsPeriod='month', selectedYear=Number(TODAY.slice(0,4)), selectedMonth=monthKey(TODAY), selectedWeekDate=TODAY;
 let trendCounts={year:10,month:8,week:14}, trendCustom={year:false,month:false,week:false}, seriesVisible={expense:true,income:true,net:true};
 let selectedCategoryGroup='', selectedCategoryId='';
@@ -261,8 +253,29 @@ function dateLabelShort(key) { const d=dateFromKey(key); return `${d.getMonth()+
 function amountForCell(cents) { const n=cents/100; if(n>=10000) return `${(n/10000).toFixed(1)}万`; if(n>=1000) return `${(n/1000).toFixed(1)}千`; return n.toFixed(0); }
 function toast(message,error=false) { const el=document.createElement('div'); el.className=`toast${error?' error':''}`; el.textContent=message; $('#toastRegion').append(el); setTimeout(()=>el.remove(),2700); }
 async function commit(message) {
-  try { if(account)await saveAccountChanges();else await persistLocalState(state); render(); if(message) toast(message); }
-  catch(e) { render(); toast(e?.message||'保存失败，请检查账户服务或浏览器本机存储设置。',true); }
+  try { if(account)await saveAccountChanges(); render(); if(message) toast(message); }
+  catch(e) { render(); toast(e?.message||'保存失败，请检查账户服务后重试。',true); }
+}
+
+function openLoginRequiredModal(feature='此功能') {
+  showModal('需要登录','个人账户',`<p class="modal-note">${htmlSafe(feature)}需要登录个人账户后使用。登录或注册后即可继续。</p><div class="form-footer"><button type="button" class="secondary-btn" data-action="auth-required-cancel">取消</button><button type="button" class="primary-btn" data-action="auth-required-go">前往登录/注册</button></div>`,'auth-required');
+}
+function requireAccount(feature,options={}) {
+  if(account)return false;
+  pendingProtectedPage=options.page||null;pendingProtectedAction=options.action||null;
+  openLoginRequiredModal(feature);return true;
+}
+function continueAfterLogin() {
+  const destination=pendingProtectedPage,action=pendingProtectedAction;
+  pendingProtectedPage=null;pendingProtectedAction=null;
+  if(destination)page=destination;
+  closeModal();render();
+  if(!action)return;
+  if(action.type==='resume-transaction'){
+    const record=action.draft.recordId?state.transactions.find(item=>item.id===action.draft.recordId):null;
+    openTransactionModal(action.draft.type,record,action.draft);
+  } else if(action.type==='repay-debt') openRepaymentModal(action.id);
+  else if(action.type==='debt-history') openDebtHistoryModal();
 }
 
 function calendarHeaderTitle() {
@@ -452,6 +465,7 @@ function renderAccounts() {
       <section class="surface finance-section"><div class="card-heading"><div><h2>债务</h2><div class="subheading">剩余待还 ${fmtMoney(totals.liabilities)} · ${debts.length} 笔</div></div><div class="finance-section-actions"><button class="small-button" data-action="debt-history">还款记录</button><button class="primary-btn" data-action="add-debt">＋ 添加债务</button></div></div><div class="finance-grid debt-grid">${debtCards||'<div class="empty-state finance-empty">暂无待还债务。添加后会显示下次还款日和预计还清日期。</div>'}</div></section></div>`;
 }
 function render() {
+  if(!account&&(page==='stats'||page==='accounts'))page='calendar';
   $$('.nav-item').forEach(btn=>btn.classList.toggle('active',btn.dataset.page===page));
   updateAccountButton();
   main.innerHTML=page==='calendar'?renderCalendar():page==='stats'?renderStats():renderAccounts();
@@ -461,7 +475,14 @@ function showModal(title,eyebrow,html,kind) {
   activeModal=kind; $('#modalTitle').textContent=title; $('#modalEyebrow').textContent=eyebrow; modalBody.innerHTML=html; modalBackdrop.hidden=false;
   setTimeout(()=>$('input:not([type=hidden]),select,button',modalBody)?.focus(),20);
 }
-function closeModal() { modalBackdrop.hidden=true; activeModal=null; categoryReturnDraft=null; modalBody.innerHTML=''; }
+function closeModal() {
+  const closingModal=activeModal,resume=!account&&pendingProtectedAction?.type==='resume-transaction'?pendingProtectedAction:null;
+  modalBackdrop.hidden=true;activeModal=null;categoryReturnDraft=null;modalBody.innerHTML='';
+  if(!account&&(closingModal==='auth-required'||closingModal==='account')){
+    pendingProtectedPage=null;pendingProtectedAction=null;
+    if(resume){const record=resume.draft.recordId?state.transactions.find(item=>item.id===resume.draft.recordId):null;openTransactionModal(resume.draft.type,record,resume.draft);}
+  }
+}
 function openAssetModal(asset=null) {
   const kind=asset?.kind||'cash',meta=assetKind(asset||{kind}),custom=kind==='custom';
   const options=assetKinds.map(k=>`<option value="${k.id}" ${kind===k.id?'selected':''}>${k.icon} ${htmlSafe(k.name)}</option>`).join('');
@@ -570,15 +591,16 @@ function openTransactionModal(type='expense',record=null,draft=null) {
   const recordAmount=draft?.amount??(record?(record.amountCents/100).toFixed(2):'');
   const recordNote=draft?.note??record?.note??'';
   const recordAccountId=draft?.accountId??record?.accountId??'';
+  const accountField=account?`<div class="field"><label for="transactionAccount">关联账户（可选）</label><select id="transactionAccount" name="accountId"><option value="">不关联账户</option>${state.assets.map(a=>`<option value="${htmlSafe(a.id)}" ${a.id===recordAccountId?'selected':''}>${htmlSafe(a.name||assetKind(a).name)} · ${htmlSafe(assetKind(a).name)}</option>`).join('')}</select><small class="avatar-hint">关联后会同步增减账户余额；未关联的记录不影响资产余额。</small></div>`:`<div class="field"><label>关联账户（可选）</label><button type="button" class="secondary-btn" data-action="require-transaction-account">登录后关联账户</button><small class="avatar-hint">收支记录可在当前会话中使用；登录后才能关联并同步账户余额。</small></div>`;
   const form=`<form id="transactionForm" class="form-stack" data-record-id="${htmlSafe(recordId)}">
     <div class="form-row"><div class="field"><label for="transactionType">收支类型</label><select name="type" id="transactionType"><option value="expense" ${fixedType==='expense'?'selected':''}>支出</option><option value="income" ${fixedType==='income'?'selected':''}>收入</option></select></div><div class="field"><label for="transactionDate">日期</label><input type="date" id="transactionDate" name="date" value="${htmlSafe(recordDate)}" required></div></div>
     <div id="categoryPicker">${renderCategoryPicker(fixedType)}</div>
     <div class="field"><label for="transactionContent">具体内容</label><input id="transactionContent" name="content" maxlength="80" placeholder="例如：午餐、超市采购" value="${htmlSafe(recordContent)}" required></div>
     <div class="field"><label for="transactionAmount">金额</label><div class="amount-input-wrap"><span class="amount-prefix">¥</span><input id="transactionAmount" name="amount" inputmode="decimal" placeholder="0.00" value="${htmlSafe(recordAmount)}" required></div></div>
-    <div class="field"><label for="transactionAccount">关联账户（可选）</label><select id="transactionAccount" name="accountId"><option value="">不关联账户</option>${state.assets.map(a=>`<option value="${htmlSafe(a.id)}" ${a.id===recordAccountId?'selected':''}>${htmlSafe(a.name||assetKind(a).name)} · ${htmlSafe(assetKind(a).name)}</option>`).join('')}</select><small class="avatar-hint">关联后会同步增减账户余额；未关联的记录不影响资产余额。</small></div>
+    ${accountField}
     <div class="field"><label for="transactionNote">备注（可选）</label><textarea id="transactionNote" name="note" rows="2" maxlength="160" placeholder="补充一点说明">${htmlSafe(recordNote)}</textarea></div>
     <div class="form-error" id="formError"></div>
-    <div class="form-footer">${record?`<button type="button" class="danger-btn" data-action="delete-record" data-id="${htmlSafe(record.id)}">删除记录</button>`:'<span class="modal-note">保存后会同步更新日历、预算和统计。</span>'}<div class="form-footer-right"><button type="button" class="secondary-btn close-modal">取消</button><button type="submit" class="primary-btn">${record?'保存修改':'保存记录'}</button></div></div>
+    <div class="form-footer">${record?`<button type="button" class="danger-btn" data-action="delete-record" data-id="${htmlSafe(record.id)}">删除记录</button>`:`<span class="modal-note">${account?'保存后会同步更新日历、预算和统计。':'未登录时记录仅保留在当前会话；登录后可查看统计并同步保存。'}</span>`}<div class="form-footer-right"><button type="button" class="secondary-btn close-modal">取消</button><button type="submit" class="primary-btn">${record?'保存修改':'保存记录'}</button></div></div>
   </form>`;
   showModal(record?'编辑收支记录':fixedType==='expense'?'添加支出':'添加收入',record?'修改已保存的记录':'记一笔',form,'transaction');
 }
@@ -593,7 +615,7 @@ function openAccountModal(mode='login') {
     return;
   }
   const registering=mode==='register';
-  showModal(registering?'创建个人账户':'登录个人账户','账户与同步',`<div class="account-tabs"><button type="button" class="${!registering?'active':''}" data-auth-mode="login">登录</button><button type="button" class="${registering?'active':''}" data-auth-mode="register">创建账户</button></div><p class="modal-note account-explainer">账户数据保存在运行轻账服务的这台电脑。其他浏览器使用相同地址登录即可共享；首次创建账户会导入当前浏览器里的账目和分类。</p><form id="accountForm" class="form-stack" data-mode="${registering?'register':'login'}"><div class="field"><label for="accountUsername">账户名</label><input id="accountUsername" name="username" autocomplete="username" minlength="3" maxlength="64" placeholder="3–64 位中文、字母或数字" required></div><div class="field"><label for="accountPassword">密码</label><input id="accountPassword" name="password" type="password" autocomplete="${registering?'new-password':'current-password'}" minlength="${registering?8:1}" maxlength="256" placeholder="${registering?'至少 8 个字符':'输入账户密码'}" required></div>${registering?`<div class="field"><label for="accountPasswordConfirm">确认密码</label><input id="accountPasswordConfirm" name="passwordConfirm" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="再输入一次密码" required></div>`:''}<div class="form-error" id="formError"></div><div class="form-footer"><span class="modal-note">数据只发送到当前轻账服务。</span><div class="form-footer-right"><button type="button" class="secondary-btn close-modal">取消</button><button class="primary-btn" type="submit">${registering?'创建并导入':'登录并同步'}</button></div></div></form>`,'account');
+  showModal(registering?'创建个人账户':'登录个人账户','账户与同步',`<div class="account-tabs"><button type="button" class="${!registering?'active':''}" data-auth-mode="login">登录</button><button type="button" class="${registering?'active':''}" data-auth-mode="register">创建账户</button></div><p class="modal-note account-explainer">账户数据保存在运行轻账服务的这台电脑。其他浏览器使用相同地址登录即可共享；首次创建账户会导入当前会话中的账目和分类。</p><form id="accountForm" class="form-stack" data-mode="${registering?'register':'login'}"><div class="field"><label for="accountUsername">账户名</label><input id="accountUsername" name="username" autocomplete="username" minlength="3" maxlength="64" placeholder="3–64 位中文、字母或数字" required></div><div class="field"><label for="accountPassword">密码</label><input id="accountPassword" name="password" type="password" autocomplete="${registering?'new-password':'current-password'}" minlength="${registering?8:1}" maxlength="256" placeholder="${registering?'至少 8 个字符':'输入账户密码'}" required></div>${registering?`<div class="field"><label for="accountPasswordConfirm">确认密码</label><input id="accountPasswordConfirm" name="passwordConfirm" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="再输入一次密码" required></div>`:''}<div class="form-error" id="formError"></div><div class="form-footer"><span class="modal-note">数据只发送到当前轻账服务。</span><div class="form-footer-right"><button type="button" class="secondary-btn close-modal">取消</button><button class="primary-btn" type="submit">${registering?'创建并导入':'登录并同步'}</button></div></div></form>`,'account');
 }
 function openAvatarEditor() {
   avatarEditorValue=normalizeAvatar(account?.avatar);
@@ -638,13 +660,12 @@ async function submitAvatarForm(error) {
 async function logoutAccount() {
   try { await apiRequest('/api/logout',{method:'POST',body:'{}'}); }
   catch(e) { toast(`退出失败：${e.message}`,true); return; }
-  account=null;accountBase=null;state=emptyState();await clearLocalState();closeModal();render();toast('已退出账户；本机缓存已清除，账户账本仍保存在轻账服务中。');
+  account=null;accountBase=null;state=emptyState();page='calendar';pendingProtectedPage=null;pendingProtectedAction=null;await clearLocalState();closeModal();render();toast('已退出账户；本机缓存已清除，账户账本仍保存在轻账服务中。');
 }
 async function submitAccountForm(form,error) {
   const data=new FormData(form),mode=form.dataset.mode,username=String(data.get('username')||'').trim(),password=String(data.get('password')||'');
   if(!username||!password){error.textContent='请填写账户名和密码。';return;}
-  let local=normalizeState(await readPersistedState()||state);
-  if(hasUserData(state))local=mergeAccountData(local,state);
+  const local=normalizeState(state);
   try {
     if(mode==='register') {
       if(password.length<8||password!==String(data.get('passwordConfirm')||'')){error.textContent=password.length<8?'密码至少需要 8 个字符。':'两次输入的密码不一致。';return;}
@@ -659,7 +680,7 @@ async function submitAccountForm(form,error) {
       state=hasUserData(local)?mergeConcurrentAccountData(cloud,local,cloud):cloud;
       if(JSON.stringify(state)!==JSON.stringify(cloud))await saveAccountChanges();
     }
-    await clearLocalState();closeModal();render();toast(mode==='register'?'账户已创建，当前浏览器账本已导入':'登录成功，账本已同步');
+    await clearLocalState();continueAfterLogin();toast(mode==='register'?'账户已创建，当前会话账本已导入':'登录成功，账本已同步');
   } catch(e) { error.textContent=e.message||'账户操作失败，请重试。'; }
 }
 
@@ -668,6 +689,7 @@ main.addEventListener('click',async e=>{
   const periodBtn=e.target.closest('[data-period]');if(periodBtn){statsPeriod=periodBtn.dataset.period;render();return;}
   const cell=e.target.closest('.calendar-cell');if(cell){selectedDate=cell.dataset.date;render();return;}
   const action=e.target.closest('[data-action]');if(!action)return;
+  if(!account&&['add-asset','edit-asset','add-debt','edit-debt'].includes(action.dataset.action)){requireAccount('账户管理功能',{page:'accounts'});return;}
   switch(action.dataset.action){
     case 'calendar-prev': selectedDate=calendarView==='month'?shiftMonth(selectedDate,-1):shiftDate(selectedDate,calendarView==='week'?-7:-1);render();break;
     case 'calendar-next': selectedDate=calendarView==='month'?shiftMonth(selectedDate,1):shiftDate(selectedDate,calendarView==='week'?7:1);render();break;
@@ -682,10 +704,10 @@ main.addEventListener('click',async e=>{
     case 'edit-asset':{const item=state.assets.find(a=>a.id===action.dataset.id);if(item)openAssetModal(item);break;}
     case 'add-debt':openDebtModal();break;
     case 'edit-debt':{const item=state.debts.find(d=>d.id===action.dataset.id);if(item)openDebtModal(item);break;}
-    case 'repay-debt':openRepaymentModal(action.dataset.id);break;
-    case 'debt-history':openDebtHistoryModal();break;
+    case 'repay-debt':if(requireAccount('债务还款',{action:{type:'repay-debt',id:action.dataset.id}}))break;openRepaymentModal(action.dataset.id);break;
+    case 'debt-history':if(requireAccount('还款记录',{action:{type:'debt-history'}}))break;openDebtHistoryModal();break;
     case 'undo-repayment':await undoRepayment(action.dataset.id);break;
-    case 'open-accounts':page='accounts';render();break;
+    case 'open-accounts':if(!requireAccount('个人账户页面',{page:'accounts'})){page='accounts';render();}break;
   }
 });
 main.addEventListener('change',e=>{
@@ -700,11 +722,18 @@ main.addEventListener('change',e=>{
 });
 
 $('#accountButton').addEventListener('click',()=>openAccountModal());
-$('.bottom-nav').addEventListener('click',e=>{const nav=e.target.closest('.nav-item');if(nav){page=nav.dataset.page;render();}});
+$('.bottom-nav').addEventListener('click',e=>{const nav=e.target.closest('.nav-item');if(!nav)return;const target=nav.dataset.page;if(!account&&(target==='stats'||target==='accounts')){requireAccount(target==='stats'?'统计页面':'账户页面',{page:target});return;}page=target;render();});
 $('.close-modal').addEventListener('click',closeModal);
 modalBackdrop.addEventListener('click',e=>{if(e.target===modalBackdrop||e.target.closest('.close-modal'))closeModal();});
 modalBody.addEventListener('click',async e=>{
   const action=e.target.closest('[data-action]');
+  if(action?.dataset.action==='auth-required-go'){openAccountModal('login');return;}
+  if(action?.dataset.action==='auth-required-cancel'){closeModal();return;}
+  if(action?.dataset.action==='require-transaction-account'){
+    const form=$('#transactionForm',modalBody),data=form?new FormData(form):null;
+    const draft={type:String(data?.get('type')||'expense'),date:String(data?.get('date')||selectedDate),content:String(data?.get('content')||''),amount:String(data?.get('amount')||''),note:String(data?.get('note')||''),accountId:'',recordId:form?.dataset.recordId||'',categoryId:selectedCategoryId};
+    requireAccount('关联资产账户',{action:{type:'resume-transaction',draft}});return;
+  }
   if(action?.dataset.action==='edit-asset-balance'){openAssetBalanceModal(action.dataset.id);return;}
   if(action?.dataset.action==='back-to-asset'){const asset=state.assets.find(a=>a.id===action.dataset.id);if(asset)openAssetModal(asset);return;}
   const balanceMode=e.target.closest('[data-balance-mode]');if(balanceMode){setAssetBalanceMode(balanceMode.dataset.balanceMode);return;}
@@ -794,6 +823,7 @@ modalBody.addEventListener('submit',async e=>{
     if(!content){error.textContent='请填写具体内容。';return;}
     if(amountCents===null){error.textContent='金额须大于 0，最多填写两位小数。';return;}
     const id=form.dataset.recordId||`txn_${crypto.randomUUID()}`, existing=state.transactions.find(r=>r.id===id), now=Date.now(),accountId=String(data.get('accountId')||'');
+    if(accountId&&!account){requireAccount('关联资产账户',{action:{type:'resume-transaction',draft:{type,date,content,amount:String(data.get('amount')||''),note:String(data.get('note')||''),accountId:'',recordId:form.dataset.recordId||'',categoryId:selectedCategoryId}}});return;}
     if(accountId&&!state.assets.some(a=>a.id===accountId)){error.textContent='所选账户已不存在，请重新选择。';return;}
     const record={id,type,date,amountCents,categoryId:selectedCategoryId,content,note:String(data.get('note')||'').trim(),...(accountId?{accountId}:{}),createdAt:existing?.createdAt||now,updatedAt:now};
     upsertTransaction(record,existing);
@@ -873,18 +903,17 @@ modalBackdrop.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();})
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!modalBackdrop.hidden)closeModal();});
 
 (async function init(){
-  const saved=await readPersistedState(),local=normalizeState(saved);
-  state=local;
   try {
     const session=await apiRequest('/api/session');
     if(session.authenticated){
       account=session.user;
       const latest=await apiRequest('/api/data'),cloud=normalizeState(latest.data);
       accountBase=cloneState(cloud);
-      state=hasUserData(local)?mergeConcurrentAccountData(cloud,local,cloud):cloud;
-      if(JSON.stringify(state)!==JSON.stringify(cloud))await saveAccountChanges();
-      await clearLocalState();
+      state=cloud;
+    } else {
+      account=null;accountBase=null;state=emptyState();
     }
-  } catch(e) { console.warn('Account sync is unavailable; continuing with local data.',e); }
+  } catch(e) { console.warn('Account session could not be restored; starting with an empty guest ledger.',e);account=null;accountBase=null;state=emptyState(); }
+  await clearLocalState();
   render();
 })();

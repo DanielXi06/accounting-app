@@ -23,7 +23,7 @@ global.document = {
 const cachedCoreVersion = { ...global.LedgerCore };
 delete cachedCoreVersion.dailyBudgetForDate;
 global.window = { LedgerCore: cachedCoreVersion, confirm: () => true };
-let storedState = null;
+let storedState = JSON.stringify({ version: 1, categories: [], transactions: [{ id: 'legacy-guest-record', type: 'expense', date: '2026-10-01', amountCents: 100, categoryId: 'seed_e_00', content: '旧访客记录' }], monthBudgets: {}, dayBudgets: {}, assets: [], debts: [], debtPayments: [] });
 let transactionDraftElement = null;
 getElement('#modalBody').querySelector = selector => selector === '#transactionForm' && transactionDraftElement ? transactionDraftElement : getElement(selector);
 global.localStorage = { getItem: () => storedState, setItem: (_key, value) => { storedState = value; }, removeItem: () => { storedState = null; } };
@@ -61,8 +61,44 @@ const targetFor = selectors => ({ closest: selector => selectors[selector] || nu
   assert.ok(main.innerHTML.indexOf('当日概览')<main.innerHTML.indexOf('债务提醒'));
   assert.ok(main.innerHTML.indexOf('债务提醒')<main.innerHTML.indexOf('当日记录'));
   assert.match(main.innerHTML, /查看还款记录/);
+  assert.doesNotMatch(main.innerHTML, /旧访客记录/);
+  assert.equal(storedState, null, 'legacy guest data is cleared when the app opens without a signed-in account');
 
   await bottomNav.handlers.click[0]({ target: targetFor({ '.nav-item': nav[1] }) });
+  const modal=getElement('#modalBody');
+  assert.match(modal.innerHTML,/需要登录/);
+  assert.match(modal.innerHTML,/前往登录\/注册/);
+  await modal.handlers.click[0]({target:targetFor({'[data-action]':{dataset:{action:'auth-required-cancel'}}})});
+  assert.match(main.innerHTML,/日历/,'cancel keeps the user on the calendar');
+  await bottomNav.handlers.click[0]({ target: targetFor({ '.nav-item': nav[2] }) });
+  assert.match(modal.innerHTML,/需要登录/,'the account page is gated for guests');
+  await modal.handlers.click[0]({target:targetFor({'[data-action]':{dataset:{action:'auth-required-cancel'}}})});
+  assert.match(main.innerHTML,/日历/);
+
+  const todayKey = new Date();
+  const todayText = `${todayKey.getFullYear()}-${String(todayKey.getMonth()+1).padStart(2,'0')}-${String(todayKey.getDate()).padStart(2,'0')}`;
+  await main.handlers.click[0]({target:targetFor({'[data-action]':{dataset:{action:'edit-month-budget'}}})});
+  await modal.handlers.submit[0]({preventDefault(){},target:{id:'budgetForm',values:{amount:'25.00'}}});
+  assert.equal(storedState,null,'guest changes remain in memory and are not persisted locally');
+  transactionDraftElement={id:'transactionForm',dataset:{recordId:''},values:{type:'expense',date:todayText,content:'访客草稿',amount:'6.00',note:''}};
+  await main.handlers.click[0]({target:targetFor({'[data-action]':{dataset:{action:'add-expense'}}})});
+  assert.match(modal.innerHTML,/data-action="require-transaction-account"/,'guest transactions offer login for account linking');
+  await modal.handlers.click[0]({target:targetFor({'[data-action]':{dataset:{action:'require-transaction-account'}}})});
+  assert.match(modal.innerHTML,/需要登录/);
+  await modal.handlers.click[0]({target:targetFor({'[data-action]':{dataset:{action:'auth-required-cancel'}}})});
+  assert.match(modal.innerHTML,/value="访客草稿"/,'cancel returns to the in-progress transaction');
+  transactionDraftElement=null;
+  await getElement('#modalBackdrop').handlers.click[0]({target:{closest:selector=>selector==='.close-modal'?{}:null}});
+  await bottomNav.handlers.click[0]({ target: targetFor({ '.nav-item': nav[1] }) });
+  assert.match(modal.innerHTML,/需要登录/);
+  await modal.handlers.click[0]({target:targetFor({'[data-action]':{dataset:{action:'auth-required-go'}}})});
+  await modal.handlers.click[0]({target:targetFor({'[data-auth-mode]':{dataset:{authMode:'register'}}})});
+  const registrationForm={id:'accountForm',dataset:{mode:'register'},values:{username:'render.test',password:'password 123',passwordConfirm:'password 123'}};
+  await modal.handlers.submit[0]({preventDefault(){},target:registrationForm});
+  assert.equal(getElement('#accountLabel').textContent,'render.test');
+  assert.match(main.innerHTML,/收支趋势/,'successful registration continues to the requested statistics page');
+  assert.equal(remoteData.monthBudgets[todayText.slice(0,7)],2500,'registration imports the current guest session data');
+
   assert.match(main.innerHTML, /收支趋势/);
   assert.match(main.innerHTML, /支出分类排行/);
   assert.match(main.innerHTML, /收入分类排行/);
@@ -84,8 +120,6 @@ const targetFor = selectors => ({ closest: selector => selectors[selector] || nu
   let form = { id: 'budgetForm', values: { amount: '310.00' } };
   await getElement('#modalBody').handlers.submit[0]({ preventDefault() {}, target: form });
   assert.match(main.innerHTML, /¥310\.00/);
-  const todayKey = new Date();
-  const todayText = `${todayKey.getFullYear()}-${String(todayKey.getMonth()+1).padStart(2,'0')}-${String(todayKey.getDate()).padStart(2,'0')}`;
   const expectedTodayBudget = (global.LedgerCore.dailyBudgetForDate(31000, todayText, [], undefined, false).budgetCents / 100).toFixed(2);
   assert.ok(main.innerHTML.includes(`¥${expectedTodayBudget}`), 'the current day uses the remaining month balance');
   await clickMainAction('edit-month-budget');
@@ -121,20 +155,19 @@ const targetFor = selectors => ({ closest: selector => selectors[selector] || nu
   transactionDraftElement = null;
   const categoryForm = { id: 'categoryForm', values: { type: 'expense', group: '__new__', newGroup: '咖啡馆', name: '手冲咖啡', icon: '☕' } };
   await modalBody.handlers.submit[0]({ preventDefault() {}, target: categoryForm });
-  let saved = JSON.parse(storedState);
+  let saved = remoteData;
   const customCategory = saved.categories.find(c => c.name === '手冲咖啡');
   assert.ok(customCategory);
 
   await bottomNav.handlers.click[0]({ target: targetFor({ '.nav-item': nav[0] }) });
   await clickMainAction('add-expense');
-  const modal = getElement('#modalBody');
   await modal.handlers.click[0]({ target: targetFor({ '[data-category-group]': { dataset: { categoryGroup: '咖啡馆' } } }) });
   const date = new Date();
   const today = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
   const transactionForm = { id: 'transactionForm', dataset: { recordId: '' }, values: { type: 'expense', date: today, content: '验证用咖啡', amount: '12.50', note: '' } };
   await modal.handlers.submit[0]({ preventDefault() {}, target: transactionForm });
   assert.match(main.innerHTML, /验证用咖啡/);
-  saved = JSON.parse(storedState);
+  saved = remoteData;
   const record = saved.transactions[0];
   assert.equal(record.categoryId, customCategory.id);
   assert.equal(record.amountCents, 1250);
@@ -150,13 +183,11 @@ const targetFor = selectors => ({ closest: selector => selectors[selector] || nu
   await modal.handlers.click[0]({ target: targetFor({ '[data-action]': { dataset: { action: 'delete-record', id: record.id } } }) });
   await sleep(10);
   assert.doesNotMatch(main.innerHTML, /已编辑咖啡/);
-  assert.equal(JSON.parse(storedState).transactions.length, 0);
+  assert.equal(remoteData.transactions.length, 0);
   await bottomNav.handlers.click[0]({ target: targetFor({ '.nav-item': nav[1] }) });
   assert.match(main.innerHTML, /¥0\.00/);
   await getElement('#accountButton').handlers.click[0]({});
-  const accountForm = { id: 'accountForm', dataset: { mode: 'register' }, values: { username: 'render.test', password: 'password 123', passwordConfirm: 'password 123' } };
-  await modal.handlers.submit[0]({ preventDefault() {}, target: accountForm });
-  assert.equal(getElement('#accountLabel').textContent, 'render.test');
+  assert.match(modal.innerHTML,/render.test/);
   assert.equal(storedState, null);
   assert.equal(remoteData.monthBudgets[todayText.slice(0,7)], 31000);
   await getElement('#accountButton').handlers.click[0]({});
@@ -313,5 +344,5 @@ const targetFor = selectors => ({ closest: selector => selectors[selector] || nu
   assert.equal(oneTimeDebt.expectedPayoffDate,null,'one-time debt does not show a recurring payoff forecast');
   await bottomNav.handlers.click[0]({ target: targetFor({ '.nav-item': nav[0] }) });
   assertCalendarRepayment(oneTimeDue);
-  console.log('界面与交互验证通过：债务提醒排序、日历查看还款历史、债务历史保留式移除、周期和单次还款日历标记、统计和撤回。');
+  console.log('界面与交互验证通过：访客数据清理、统计和账户登录拦截、日历账户关联提示、登录后继续访问、债务提醒与还款历史、统计和撤回。');
 })().catch(error => { console.error(error); process.exitCode = 1; });
