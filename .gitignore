@@ -2,3 +2,4 @@
 .verify-account-test-*/
 __pycache__/
 *.py[cod]
+.venv/

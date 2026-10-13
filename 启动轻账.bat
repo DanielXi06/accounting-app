@@ -54,17 +54,33 @@ if not defined NEED_PYWEBVIEW if not defined NEED_WEBVIEW2 goto launch_desktop
 
 echo.
 echo 首次运行需要配置桌面窗口组件。
-if defined NEED_PYWEBVIEW echo - 将为当前 Python 用户安装 pywebview。
+if defined NEED_PYWEBVIEW echo - 将在应用目录的 .venv 中安装 pywebview。
 if defined NEED_WEBVIEW2 echo - 将安装 Microsoft WebView2 运行时。
 choice /C YN /N /M "现在自动下载并配置这些组件吗？[Y/N] "
 if errorlevel 2 goto install_cancelled
 
-if defined NEED_PYWEBVIEW (
+if defined NEED_PYWEBVIEW goto install_pywebview
+goto install_webview2_if_needed
+
+:install_pywebview
+if not exist "%~dp0.venv\Scripts\python.exe" (
     echo.
-    echo 正在安装桌面窗口组件...
-    %PYTHON_RUN% -m pip install --user --disable-pip-version-check -r "%~dp0requirements-desktop.txt"
+    echo 正在创建应用专用 Python 环境...
+    %PYTHON_RUN% -m venv "%~dp0.venv"
     if errorlevel 1 goto startup_failed
 )
+"%~dp0.venv\Scripts\python.exe" -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" >nul 2>nul
+if errorlevel 1 (
+    %PYTHON_RUN% -m venv "%~dp0.venv"
+    if errorlevel 1 goto startup_failed
+)
+set "PYTHON_RUN="%~dp0.venv\Scripts\python.exe""
+echo.
+echo 正在安装桌面窗口组件...
+%PYTHON_RUN% -m pip install --disable-pip-version-check -r "%~dp0requirements-desktop.txt"
+if errorlevel 1 goto startup_failed
+
+:install_webview2_if_needed
 if defined NEED_WEBVIEW2 (
     echo.
     echo 正在安装 Microsoft WebView2 运行时...
@@ -88,6 +104,11 @@ exit /b 0
 
 :detect_python
 set "PYTHON_RUN="
+set "VENV_PYTHON=%~dp0.venv\Scripts\python.exe"
+if exist "%VENV_PYTHON%" (
+    "%VENV_PYTHON%" -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" >nul 2>nul
+    if not errorlevel 1 (set "PYTHON_RUN="%VENV_PYTHON%""& exit /b 0)
+)
 py -3 -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" >nul 2>nul
 if not errorlevel 1 (set "PYTHON_RUN=py -3"& exit /b 0)
 python -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" >nul 2>nul
