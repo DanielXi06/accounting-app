@@ -4,9 +4,9 @@ cd /d "%~dp0"
 chcp 65001 >nul
 
 call :detect_python
-if defined PYTHON_RUN goto check_desktop_components
+if defined PYTHON_RUN goto run_server
 
-echo 未检测到 Python 3.10 或更新版本。轻账桌面版需要 Python 才能运行。
+echo 未检测到 Python 3.10 或更新版本。轻账本地服务需要 Python 才能运行。
 where winget >nul 2>nul
 if errorlevel 1 goto ask_official_installer
 
@@ -19,7 +19,7 @@ echo 正在安装 Python...
 winget install --id Python.Python.3.14 --exact --scope user --accept-package-agreements --accept-source-agreements
 if errorlevel 1 goto ask_official_installer
 call :detect_python
-if defined PYTHON_RUN goto check_desktop_components
+if defined PYTHON_RUN goto run_server
 goto winget_install_unverified
 
 :winget_install_unverified
@@ -45,74 +45,14 @@ if errorlevel 1 goto startup_failed
 :python_installed
 call :detect_python
 if not defined PYTHON_RUN goto python_not_found_after_install
-goto check_desktop_components
+goto run_server
 
-:check_desktop_components
-set "NEED_PYWEBVIEW="
-set "NEED_WEBVIEW2="
-%PYTHON_RUN% -c "import webview" >nul 2>nul
-if errorlevel 1 set "NEED_PYWEBVIEW=1"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0配置桌面环境.ps1" -CheckWebView2 >nul 2>nul
-if errorlevel 1 set "NEED_WEBVIEW2=1"
-if not defined NEED_PYWEBVIEW if not defined NEED_WEBVIEW2 goto launch_desktop
-
+:run_server
 echo.
-echo 首次运行需要配置桌面窗口组件。
-if not defined NEED_PYWEBVIEW goto desktop_no_pywebview_notice
-echo - 将在应用目录的 .venv 中安装 pywebview。
-:desktop_no_pywebview_notice
-if not defined NEED_WEBVIEW2 goto desktop_no_webview_notice
-echo - 将安装 Microsoft WebView2 运行时。
-:desktop_no_webview_notice
-set "ANSWER="
-set /p "ANSWER=现在自动下载并配置这些组件吗？[Y/N] "
-if /I not "%ANSWER%"=="Y" goto install_cancelled
-
-if defined NEED_PYWEBVIEW goto install_pywebview
-goto install_webview2_if_needed
-
-:install_pywebview
-if exist "%~dp0.venv\Scripts\python.exe" goto validate_app_venv
-echo.
-echo 正在创建应用专用 Python 环境...
-%PYTHON_RUN% -m venv "%~dp0.venv"
+echo 正在启动轻账，浏览器会自动打开。请保持此窗口打开。
+%PYTHON_RUN% server.py --open-browser
 if errorlevel 1 goto startup_failed
-
-:validate_app_venv
-"%~dp0.venv\Scripts\python.exe" -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" >nul 2>nul
-if not errorlevel 1 goto app_venv_ready
-%PYTHON_RUN% -m venv "%~dp0.venv"
-if errorlevel 1 goto startup_failed
-
-:app_venv_ready
-set "PYTHON_RUN="%~dp0.venv\Scripts\python.exe""
-echo.
-echo 正在安装桌面窗口组件...
-%PYTHON_RUN% -m pip install --disable-pip-version-check -r "%~dp0requirements-desktop.txt"
-if errorlevel 1 goto startup_failed
-
-:install_webview2_if_needed
-if not defined NEED_WEBVIEW2 goto verify_components
-echo.
-echo 正在安装 Microsoft WebView2 运行时...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0配置桌面环境.ps1" -InstallWebView2
-if errorlevel 1 goto startup_failed
-
-:verify_components
-
-%PYTHON_RUN% -c "import webview" >nul 2>nul
-if errorlevel 1 goto setup_incomplete
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0配置桌面环境.ps1" -CheckWebView2 >nul 2>nul
-if errorlevel 1 goto setup_incomplete
-
-:launch_desktop
-for /f "delims=" %%P in ('%PYTHON_RUN% -c "import sys; print(sys.executable)" 2^>nul') do set "PYTHON_EXE=%%P"
-if not defined PYTHON_EXE goto python_not_found_after_install
-for %%P in ("%PYTHON_EXE%") do set "PYTHONW_EXE=%%~dpPpythonw.exe"
-if not exist "%PYTHONW_EXE%" goto pythonw_not_found
-
-start "" /b "%PYTHONW_EXE%" "%~dp0desktop_app.py"
-exit /b 0
+goto stopped
 
 :detect_python
 set "PYTHON_RUN="
@@ -137,22 +77,21 @@ if not errorlevel 1 (set "PYTHON_RUN=python"& exit /b 0)
 exit /b 1
 
 :install_cancelled
-echo 已取消配置，轻账桌面窗口没有启动。
+echo 已取消配置，轻账服务没有启动。
 goto startup_failed
 
 :python_not_found_after_install
 echo 未找到可运行的 Python 3.10+。已检查应用虚拟环境、当前用户 Python 安装目录以及 py/python 命令。
 goto startup_failed
 
-:pythonw_not_found
-echo 找到了 Python，但同一安装目录中没有 pythonw.exe，无法无控制台启动桌面窗口。
-goto startup_failed
-
-:setup_incomplete
-echo 桌面组件安装未完成。请检查网络连接和上方错误信息，然后重新启动。
-
 :startup_failed
 echo.
-echo 轻账桌面版启动失败。请查看上方提示；Python 可从 https://www.python.org/downloads/windows/ 获取。
+echo 轻账本地服务启动失败。请查看上方提示；Python 可从 https://www.python.org/downloads/windows/ 获取。
 pause
 exit /b 1
+
+:stopped
+echo.
+echo 轻账服务已停止。按任意键关闭此窗口。
+pause >nul
+exit /b 0
