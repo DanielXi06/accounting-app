@@ -12,6 +12,8 @@ import re
 import secrets
 import sqlite3
 import time
+import threading
+import webbrowser
 from datetime import date
 from http.cookies import SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -602,14 +604,20 @@ def main():
     parser = argparse.ArgumentParser(description="运行轻账本地服务")
     parser.add_argument("--host", default="127.0.0.1", help="监听地址（默认仅本机访问）")
     parser.add_argument("--port", type=int, default=4173)
+    parser.add_argument("--open-browser", action="store_true", help="服务就绪后打开系统默认浏览器")
     parser.add_argument("--db-path", type=Path, default=DEFAULT_DB, help=argparse.SUPPRESS)
     args = parser.parse_args()
     db_path = args.db_path.resolve()
     initialize_database(db_path)
     handler = lambda *h_args, **h_kwargs: AppHandler(*h_args, db_path=db_path, **h_kwargs)
     server = ThreadingHTTPServer((args.host, args.port), handler)
-    print(f"轻账服务已启动：http://{args.host}:{args.port}")
+    url = f"http://{args.host}:{args.port}"
+    print(f"轻账服务已启动：{url}")
     print("账户数据保存在当前电脑的 SQLite 文件中。按 Ctrl+C 停止服务。")
+    if args.open_browser:
+        # The listening socket is already bound, so opening the browser here cannot
+        # race ahead of the service startup.
+        threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
