@@ -17,12 +17,16 @@ if /I not "%ANSWER%"=="Y" goto install_cancelled
 echo.
 echo 正在安装 Python...
 winget install --id Python.Python.3.14 --exact --scope user --accept-package-agreements --accept-source-agreements
-if not errorlevel 1 goto python_installed
+if errorlevel 1 goto ask_official_installer
+call :detect_python
+if defined PYTHON_RUN goto check_desktop_components
+goto winget_install_unverified
 
+:winget_install_unverified
 echo.
-echo winget 安装未成功。
+echo winget 已结束，但没有检测到可运行的 Python。
 set "ANSWER="
-set /p "ANSWER=winget 安装未成功，是否改为从 Python 官网下载并自动安装？[Y/N] "
+set /p "ANSWER=是否改用 Python 官方安装程序自动安装？[Y/N] "
 if /I not "%ANSWER%"=="Y" goto startup_failed
 goto install_from_python_org
 
@@ -39,12 +43,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0安装Python.ps1"
 if errorlevel 1 goto startup_failed
 
 :python_installed
-rem Refresh this process PATH because newly installed user tools are not visible yet.
-for /d %%D in ("%LOCALAPPDATA%\Programs\Python\Python3*") do (
-    if exist "%%~fD\python.exe" set "PATH=%%~fD;%PATH%"
-)
 call :detect_python
 if not defined PYTHON_RUN goto python_not_found_after_install
+goto check_desktop_components
 
 :check_desktop_components
 set "NEED_PYWEBVIEW="
@@ -120,6 +121,15 @@ if exist "%VENV_PYTHON%" (
     "%VENV_PYTHON%" -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" >nul 2>nul
     if not errorlevel 1 (set "PYTHON_RUN="%VENV_PYTHON%""& exit /b 0)
 )
+rem Search installed interpreters directly so this works without refreshing PATH.
+if exist "%LOCALAPPDATA%\Programs\Python\" (
+    for /d %%D in ("%LOCALAPPDATA%\Programs\Python\Python*") do (
+        if exist "%%~fD\python.exe" (
+            "%%~fD\python.exe" -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" >nul 2>nul
+            if not errorlevel 1 (set "PYTHON_RUN="%%~fD\python.exe""& exit /b 0)
+        )
+    )
+)
 py -3 -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" >nul 2>nul
 if not errorlevel 1 (set "PYTHON_RUN=py -3"& exit /b 0)
 python -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" >nul 2>nul
@@ -131,7 +141,7 @@ echo 已取消配置，轻账桌面窗口没有启动。
 goto startup_failed
 
 :python_not_found_after_install
-echo Python 安装完成，但当前窗口仍未找到 Python 3.10+。请重新双击启动脚本。
+echo 未找到可运行的 Python 3.10+。已检查应用虚拟环境、当前用户 Python 安装目录以及 py/python 命令。
 goto startup_failed
 
 :pythonw_not_found
